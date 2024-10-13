@@ -2,9 +2,13 @@ import tkinter as tk
 from tkinter import ttk
 import threading
 import time
-from kafka import KafkaConsumer
-from kafka_utils import receive_kafka_message
-from map_utils import create_empty_map, update_map
+import logging
+from confluent_kafka import Consumer
+from common.kafka_utils import receive_kafka_message, create_kafka_consumer
+from common.map_utils import create_empty_map, update_map
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 class ECGUI:
     def __init__(self, map_size=20):
@@ -38,13 +42,11 @@ class ECGUI:
         self.draw_map()
         
     def setup_kafka_consumer(self):
-        self.consumer = KafkaConsumer(
-            'taxi_updates',
-            bootstrap_servers=['localhost:9092'],
-            auto_offset_reset='latest',
-            enable_auto_commit=True,
-            group_id='gui-group'
-        )
+        try:
+            self.consumer = create_kafka_consumer('localhost:9092', 'taxi_updates', 'gui-group')
+            logger.info("Kafka consumer set up successfully")
+        except Exception as e:
+            logger.error(f"Error setting up Kafka consumer: {str(e)}")
         
     def draw_map(self):
         cell_width = 400 // self.map_size
@@ -66,10 +68,19 @@ class ECGUI:
                     self.taxi_info.insert(tk.END, f"Taxi {self.map[i][j]} at position ({j}, {i})\n")
         
     def kafka_listener(self):
-        for message in self.consumer:
-            update = receive_kafka_message(message)
-            self.map = update_map(self.map, update)
-            self.root.after(0, self.update_gui)
+        try:
+            while True:
+                msg = self.consumer.poll(1.0)
+                if msg is None:
+                    continue
+                if msg.error():
+                    logger.error(f"Consumer error: {msg.error()}")
+                    continue
+                update = receive_kafka_message(msg)
+                self.map = update_map(self.map, update)
+                self.root.after(0, self.update_gui)
+        except Exception as e:
+            logger.error(f"Error in Kafka listener: {str(e)}")
             
     def run(self):
         kafka_thread = threading.Thread(target=self.kafka_listener, daemon=True)
@@ -77,6 +88,16 @@ class ECGUI:
         
         self.root.mainloop()
 
+    def close(self):
+        if hasattr(self, 'consumer'):
+            self.consumer.close()
+        logger.info("ECGUI closed")
+
 if __name__ == "__main__":
     gui = ECGUI()
-    gui.run()
+    try:
+        gui.run()
+    except KeyboardInterrupt:
+        logger.info("GUI interrupted by user")
+    finally:
+        gui.close()
