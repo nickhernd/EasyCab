@@ -4,8 +4,8 @@ import threading
 import time
 import logging
 from confluent_kafka import Consumer
-from common.kafka_utils import receive_kafka_message, create_kafka_consumer
-from common.map_utils import create_empty_map, update_map
+from kafka_utils import receive_kafka_message, create_kafka_consumer
+from map_utils import create_empty_map, update_map
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
