@@ -23,7 +23,7 @@ CREATE TABLE IF NOT EXISTS services (
     customer_id VARCHAR(50),
     start_location CHAR(1),
     end_location CHAR(1),
-    status ENUM('REQUESTED', 'IN_PROGRESS', 'COMPLETED', 'CANCELED') NOT NULL DEFAULT 'REQUESTED',
+    status ENUM('REQUESTED', 'QUEUED', 'IN_PROGRESS', 'COMPLETED', 'CANCELLED') NOT NULL DEFAULT 'REQUESTED',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (taxi_id) REFERENCES taxis(id),
     FOREIGN KEY (start_location) REFERENCES locations(id),

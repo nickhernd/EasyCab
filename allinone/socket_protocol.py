@@ -26,14 +26,14 @@ def parse_message(message):
     """
     try:
         if message[0] != STX[0] or message[-2] != ETX[0]:
-            raise ValueError("Invalid message format")
+            raise ValueError("Formato de mensaje inválido")
         
         json_data = message[1:-2]
         received_lrc = message[-1]
         calculated_lrc = calculate_lrc(message[:-1])
         
         if received_lrc != calculated_lrc:
-            raise ValueError("LRC check failed")
+            raise ValueError("Verificación LRC fallida")
         
         return json.loads(json_data.decode('utf-8'))
     except Exception as e:
@@ -53,10 +53,10 @@ def send_ack():
     """
     Crea un mensaje de ACK.
     """
-    return create_message({"type": "ACK"})
+    return create_message({"tipo": "ACK"})
 
 def send_nack():
     """
     Crea un mensaje de NACK.
     """
-    return create_message({"type": "NACK"})
+    return create_message({"tipo": "NACK"})

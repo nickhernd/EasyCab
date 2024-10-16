@@ -1,0 +1,2 @@
+*.sh text eol=lf
+allinone/server.properties text eol=lf

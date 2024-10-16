@@ -6,26 +6,26 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 def send_kafka_message(producer: Producer, topic: str, message: dict):
-    """
-    Envía un mensaje a un topic de Kafka.
-    """
     try:
         producer.produce(topic, json.dumps(message).encode('utf-8'))
-        producer.flush()
+        producer.flush(timeout=5)  # Espera hasta 5 segundos
         logger.info(f"Mensaje enviado exitosamente al topic '{topic}'")
     except KafkaException as e:
         logger.error(f"Error al enviar mensaje al topic '{topic}': {str(e)}")
-        raise
+    except Exception as e:
+        logger.error(f"Error inesperado al enviar mensaje: {str(e)}")
 
 def receive_kafka_message(message):
     """
     Decodifica un mensaje recibido de Kafka.
     """
     try:
+        if message is None:
+            return None
         return json.loads(message.value().decode('utf-8'))
     except json.JSONDecodeError as e:
         logger.error(f"Error al decodificar el mensaje: {str(e)}")
-        raise
+        return None
 
 def create_kafka_producer(bootstrap_servers):
     """
