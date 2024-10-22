@@ -15,7 +15,7 @@ services:
       KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
       KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092
       KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
-      KAFKA_CREATE_TOPICS: "customerrequests:1:1,centralresponses:1:1,taxistatus:1:1,taxiinstructions:1:1"
+      KAFKA_CREATE_TOPICS: "customerrequests:1:1,centralresponses:1:1,taxistatus:1:1,taxiinstructions:1:1,sensordata:1:1"
     depends_on:
       - zookeeper
     networks:
@@ -40,9 +40,12 @@ services:
       context: .
       dockerfile: Dockerfile
     command: python /app/EC_DE.py
+    ports:
+      - "5000:5000"
     environment:
       - KAFKA_BROKER=kafka:9092
       - TAXI_ID=1
+      - SENSOR_PORT=5000
     depends_on:
       - kafka
       - central
@@ -54,26 +57,43 @@ services:
       context: .
       dockerfile: Dockerfile
     command: python /app/EC_DE.py
+    ports:
+      - "5001:5000"
     environment:
       - KAFKA_BROKER=kafka:9092
       - TAXI_ID=2
+      - SENSOR_PORT=5000
     depends_on:
       - kafka
       - central
     networks:
       - easycab_network
 
-  customer:
+  sensors1:
     build:
       context: .
       dockerfile: Dockerfile
-    command: python /app/EC_Customer.py
+    command: python /app/EC_S.py
     environment:
-      - KAFKA_BROKER=kafka:9092
-      - CUSTOMER_ID=1
+      - TAXI_ID=1
+      - DIGITAL_ENGINE_HOST=taxi1
+      - DIGITAL_ENGINE_PORT=5000
     depends_on:
-      - kafka
-      - central
+      - taxi1
+    networks:
+      - easycab_network
+
+  sensors2:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: python /app/EC_S.py
+    environment:
+      - TAXI_ID=2
+      - DIGITAL_ENGINE_HOST=taxi2
+      - DIGITAL_ENGINE_PORT=5000
+    depends_on:
+      - taxi2
     networks:
       - easycab_network
 
