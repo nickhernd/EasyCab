@@ -1,0 +1,25 @@
+version: '3'
+services:
+  customer1:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: python /app/EC_Customer.py ${CENTRAL_IP}:9092 1
+    environment:
+      - KAFKA_BROKER=${CENTRAL_IP}:9092
+    networks:
+      - easycab_network
+
+  customer2:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: python /app/EC_Customer.py ${CENTRAL_IP}:9092 2
+    environment:
+      - KAFKA_BROKER=${CENTRAL_IP}:9092
+    networks:
+      - easycab_network
+
+networks:
+  easycab_network:
+    driver: bridge

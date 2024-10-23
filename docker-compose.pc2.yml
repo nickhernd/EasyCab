@@ -1,0 +1,61 @@
+version: '3'
+services:
+  mysql:
+    image: mysql:8.0
+    ports:
+      - "3306:3306"
+    environment:
+      MYSQL_ROOT_PASSWORD: easycabpass
+      MYSQL_DATABASE: easycab
+      MYSQL_USER: easycab_user
+      MYSQL_PASSWORD: easycab123
+    volumes:
+      - mysql_data:/var/lib/mysql
+    networks:
+      - easycab_network
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  central:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: python /app/EC_Central.py 8000 ${HOST_IP}:9092 mysql easycab_user easycab123
+    ports:
+      - "8000:8000"
+    environment:
+      - KAFKA_BROKER=${HOST_IP}:9092
+      - DB_HOST=mysql
+      - DISPLAY=${DISPLAY}  # Para GUI en Linux
+    volumes:
+      - /tmp/.X11-unix:/tmp/.X11-unix  # Para GUI en Linux
+    depends_on:
+      mysql:
+        condition: service_healthy
+    networks:
+      - easycab_network
+
+  gui:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: python /app/EC_gui.py
+    environment:
+      - DISPLAY=${DISPLAY}  # Para GUI en Linux
+      - CENTRAL_HOST=central
+      - CENTRAL_PORT=8000
+    volumes:
+      - /tmp/.X11-unix:/tmp/.X11-unix  # Para GUI en Linux
+    depends_on:
+      - central
+    network_mode: "host"  # Importante para la GUI
+
+volumes:
+  mysql_data:
+
+networks:
+  easycab_network:
+    driver: bridge

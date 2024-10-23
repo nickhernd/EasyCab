@@ -1,8 +1,13 @@
 FROM python:3.9-slim
 
-# Instalar dependencias del sistema
+# Instalar dependencias del sistema incluyendo tkinter
 RUN apt-get update && apt-get install -y \
+    default-libmysqlclient-dev \
+    pkg-config \
+    build-essential \
     librdkafka-dev \
+    python3-tk \
+    x11-apps \
     && rm -rf /var/lib/apt/lists/*
 
 # Crear directorio de la aplicación
@@ -15,10 +20,8 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copiar código fuente
-COPY EC_Central.py .
-COPY EC_DE.py .
-COPY EC_S.py .
-COPY EC_Customer.py .
+COPY *.py .
+COPY locations.json .
 
 # El comando se especificará en docker-compose
 CMD ["python"]

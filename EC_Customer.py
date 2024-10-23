@@ -45,7 +45,7 @@ class ECCustomer:
             print(f"Error sending request: {e}")
             return False
 
-    def wait_for_response(self, timeout=10):
+    def wait_for_response(self, timeout=1):
         start_time = time.time()
         while True:
             if time.time() - start_time > timeout:

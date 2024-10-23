@@ -19,7 +19,7 @@ class SystemTester:
 
     def make_request(self, endpoint):
         try:
-            response = self.session.get(f"{self.base_url}{endpoint}", timeout=10)
+            response = self.session.get(f"{self.base_url}{endpoint}", timeout=1)
             response.raise_for_status()
             return response.json()
         except requests.exceptions.RequestException as e:
@@ -104,7 +104,7 @@ class SystemTester:
         })
         consumer.subscribe(['centralresponses'])
         
-        timeout = time.time() + 10
+        timeout = time.time()
         while time.time() < timeout:
             msg = consumer.poll(1.0)
             if msg is None:

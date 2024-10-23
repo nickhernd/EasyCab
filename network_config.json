@@ -1,0 +1,45 @@
+{
+    "nodes": [
+        {
+            "name": "PC1_Clients",
+            "ip": "192.168.1.41",
+            "role": "clients",
+            "services": [
+                {
+                    "name": "kafka",
+                    "port": 9092
+                }
+            ]
+        },
+        {
+            "name": "PC2_Central",
+            "ip": "192.168.1.42",
+            "role": "central",
+            "services": [
+                {
+                    "name": "central_api",
+                    "port": 8000
+                },
+                {
+                    "name": "mysql",
+                    "port": 3306
+                }
+            ]
+        },
+        {
+            "name": "PC3_Taxis",
+            "ip": "192.168.1.43",
+            "role": "taxis",
+            "services": [
+                {
+                    "name": "taxi1",
+                    "port": 5000
+                },
+                {
+                    "name": "taxi2",
+                    "port": 5001
+                }
+            ]
+        }
+    ]
+}

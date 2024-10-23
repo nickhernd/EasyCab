@@ -26,6 +26,11 @@ class DigitalEngine:
         
         self.is_running = True
 
+        self.last_sensor_update = time.time()
+        self.sensor_timeout = 5  # segundos
+        self.central_heartbeat_thread = threading.Thread(target=self.send_heartbeat, daemon=True)
+        self.central_heartbeat_thread.start()
+
     def setup_kafka(self):
         """Configura las conexiones Kafka"""
         # Productor para enviar estados
@@ -41,6 +46,27 @@ class DigitalEngine:
             'auto.offset.reset': 'earliest'
         })
         self.consumer.subscribe(['taxiinstructions'])
+
+    def handle_sensor_timeout(self):
+        """Maneja el timeout del sensor"""
+        print("Perdida de conexión con el sensor - Deteniendo taxi")
+        self.state = 'STOPPED'
+        self.send_status()
+
+    def send_heartbeat(self):
+        """Envía heartbeat periódico a la central"""
+        while self.is_running:
+            try:
+                # Verificar timeout del sensor
+                if time.time() - self.last_sensor_update > self.sensor_timeout:
+                    self.handle_sensor_timeout()
+
+                # Enviar estado actual
+                self.send_status()
+                time.sleep(1)
+            except Exception as e:
+                print(f"Error enviando heartbeat: {e}")
+                time.sleep(1)
 
     def setup_sensor_server(self):
         """Configura el servidor TCP para recibir datos de sensores"""
@@ -67,6 +93,7 @@ class DigitalEngine:
 
     def process_sensor_data(self, sensor_data):
         """Procesa los datos recibidos de los sensores"""
+        self.last_sensor_update = time.time()
         status = sensor_data.get('status', 'OK')
         if status != self.sensor_status:
             self.sensor_status = status

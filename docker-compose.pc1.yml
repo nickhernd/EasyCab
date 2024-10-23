@@ -1,0 +1,50 @@
+version: '3'
+services:
+  zookeeper:
+    image: wurstmeister/zookeeper
+    ports:
+      - "2181:2181"
+    networks:
+      - easycab_network
+
+  kafka:
+    image: wurstmeister/kafka
+    ports:
+      - "9092:9092"
+    environment:
+      # Importante: kafka_advertised_listeners debe ser accesible desde otros ordenadores
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://${HOST_IP}:9092
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+    depends_on:
+      - zookeeper
+    networks:
+      - easycab_network
+
+  customer1:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: python /app/EC_Customer.py ${CENTRAL_IP}:9092 1
+    environment:
+      - KAFKA_BROKER=${CENTRAL_IP}:9092
+    depends_on:
+      - kafka
+    networks:
+      - easycab_network
+
+  customer2:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: python /app/EC_Customer.py ${CENTRAL_IP}:9092 2
+    environment:
+      - KAFKA_BROKER=${CENTRAL_IP}:9092
+    depends_on:
+      - kafka
+    networks:
+      - easycab_network
+
+networks:
+  easycab_network:
+    driver: bridge

@@ -1,0 +1,49 @@
+version: '3'
+services:
+  taxi1:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: python /app/EC_DE.py 5000 ${CENTRAL_IP}:9092 5001 1
+    ports:
+      - "5000:5000"
+    environment:
+      - KAFKA_BROKER=${CENTRAL_IP}:9092
+      - CENTRAL_HOST=${CENTRAL_IP}
+      - SENSOR_PORT=5001
+    networks:
+      - easycab_network
+
+  taxi2:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: python /app/EC_DE.py 5002 ${CENTRAL_IP}:9092 5003 2
+    ports:
+      - "5002:5002"
+    environment:
+      - KAFKA_BROKER=${CENTRAL_IP}:9092
+      - CENTRAL_HOST=${CENTRAL_IP}
+      - SENSOR_PORT=5003
+    networks:
+      - easycab_network
+
+  sensors1:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: python /app/EC_S.py taxi1 5001
+    networks:
+      - easycab_network
+
+  sensors2:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: python /app/EC_S.py taxi2 5003
+    networks:
+      - easycab_network
+
+networks:
+  easycab_network:
+    driver: bridge
