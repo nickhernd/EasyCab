@@ -1,0 +1,79 @@
+services:
+  zookeeper:
+    image: wurstmeister/zookeeper
+    ports:
+      - "2181:2181"
+    networks:
+      - easycab_network
+
+  kafka:
+    image: wurstmeister/kafka
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_ADVERTISED_HOST_NAME: ${KAFKA_HOST:-localhost}
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_CREATE_TOPICS: "taxi_positions:1:1,customer_requests:1:1,taxi_status:1:1"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      - zookeeper
+    networks:
+      - easycab_network
+
+  central:
+    build:
+      context: .
+      dockerfile: central/Dockerfile
+    environment:
+      - KAFKA_HOST=${KAFKA_HOST:-localhost}
+      - KAFKA_PORT=9092
+      - CENTRAL_HOST=0.0.0.0
+      - CENTRAL_PORT=50051
+    ports:
+      - "50051:50051"
+    volumes:
+      - ./data:/app/data
+    depends_on:
+      - kafka
+    networks:
+      - easycab_network
+
+  taxi:
+    build:
+      context: .
+      dockerfile: taxi/Dockerfile
+    environment:
+      - KAFKA_HOST=${KAFKA_HOST:-localhost}
+      - KAFKA_PORT=9092
+      - CENTRAL_HOST=central
+      - CENTRAL_PORT=50051
+      - TAXI_ID=1
+      - SENSOR_PORT=5000
+    depends_on:
+      - central
+      - kafka
+    networks:
+      - easycab_network
+    deploy:
+      replicas: 2
+
+  customer:
+    build:
+      context: .
+      dockerfile: customer/Dockerfile
+    environment:
+      - KAFKA_HOST=${KAFKA_HOST:-localhost}
+      - KAFKA_PORT=9092
+      - CENTRAL_HOST=central
+      - CENTRAL_PORT=50051
+    volumes:
+      - ./data:/app/data
+    depends_on:
+      - central
+    networks:
+      - easycab_network
+
+networks:
+  easycab_network:
+    driver: bridge
