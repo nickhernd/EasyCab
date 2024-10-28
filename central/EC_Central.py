@@ -1,251 +1,337 @@
 import sys
 import os
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
 import socket
-import threading
 import json
+import threading
 import logging
-from typing import Dict, Optional
-from common.config import CENTRAL_PORT, CENTRAL_HOST, SERVICE_STATES, TAXI_STATES
-from map_manager import MapManager
+from typing import Dict, Optional, List, Tuple
+from dataclasses import dataclass
 
-logging.basicConfig(level=logging.INFO)
+# Configuración de logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
 logger = logging.getLogger(__name__)
 
+# Estados
+TAXI_STATES = {
+    'AVAILABLE': 'AVAILABLE',
+    'BUSY': 'BUSY',
+    'STOPPED': 'STOPPED',
+    'OFFLINE': 'OFFLINE'
+}
+
+SERVICE_STATES = {
+    'PENDING': 'PENDING',
+    'ACCEPTED': 'ACCEPTED',
+    'IN_PROGRESS': 'IN_PROGRESS',
+    'COMPLETED': 'COMPLETED',
+    'REJECTED': 'REJECTED'
+}
+
+@dataclass
+class Location:
+    id: str
+    x: int
+    y: int
+
+@dataclass
+class Taxi:
+    id: int
+    state: str
+    position: Tuple[int, int]
+    destination: Optional[Tuple[int, int]] = None
+    current_service: Optional[str] = None
+    client_socket: Optional[socket.socket] = None
+
 class CentralServer:
-    def __init__(self):
-        self.map_manager = MapManager()
-        self.taxis: Dict[int, dict] = {}  # Almacena información de taxis conectados
-        self.services: Dict[str, dict] = {}  # Almacena servicios activos
-        self.lock = threading.Lock()  # Para sincronización de acceso a recursos compartidos
+    def __init__(self, host='0.0.0.0', port=50051):
+        self.host = host
+        self.port = port
+        self.running = True
         
-        # Inicializar el servidor
+        # Estructuras de datos
+        self.locations: Dict[str, Location] = {}
+        self.taxis: Dict[int, Taxi] = {}
+        self.services: Dict[str, Dict] = {}
+        self.map = [[None for _ in range(20)] for _ in range(20)]
+        
+        # Locks para sincronización
+        self.map_lock = threading.Lock()
+        self.taxi_lock = threading.Lock()
+        self.service_lock = threading.Lock()
+        
+        # Inicializar servidor
         self.server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        self.server_socket.bind((CENTRAL_HOST, CENTRAL_PORT))
+        self.server_socket.bind((self.host, self.port))
         self.server_socket.listen(10)
         
-        logger.info(f"Central Server iniciado en {CENTRAL_HOST}:{CENTRAL_PORT}")
-        
-        # Cargar localizaciones iniciales
+        # Cargar localizaciones
         self.load_locations()
+        
+        logger.info(f"Central Server iniciado en {self.host}:{self.port}")
 
     def load_locations(self):
-        """Cargar localizaciones desde el archivo JSON"""
+        """Cargar localizaciones desde archivo"""
         try:
             with open('data/EC_locations.json', 'r') as f:
                 data = json.load(f)
                 for loc in data['locations']:
                     loc_id = loc['Id']
                     x, y = map(int, loc['POS'].split(','))
-                    self.map_manager.add_location(loc_id, x, y)
+                    self.add_location(loc_id, x, y)
             logger.info("Localizaciones cargadas correctamente")
         except Exception as e:
             logger.error(f"Error cargando localizaciones: {e}")
 
-    def handle_taxi_connection(self, client_socket: socket.socket, address: str):
-        """Manejar la conexión de un taxi"""
-        taxi_id = None
-        try:
-            # Recibir datos de autenticación
-            data = client_socket.recv(1024).decode()
-            if not data:
-                return
-                
-            taxi_data = json.loads(data)
-            taxi_id = taxi_data['taxi_id']
-            
-            with self.lock:
-                # Registrar el taxi
-                self.taxis[taxi_id] = {
-                    'socket': client_socket,
-                    'address': address,
-                    'state': TAXI_STATES['AVAILABLE'],
-                    'current_service': None
-                }
-                
-                # Añadir taxi al mapa
-                self.map_manager.add_taxi(taxi_id, 1, 1, TAXI_STATES['AVAILABLE'])
-                logger.info(f"Taxi {taxi_id} conectado desde {address}")
-            
-            # Enviar confirmación
-            client_socket.send(json.dumps({'status': 'OK'}).encode())
-            
-            # Bucle principal de recepción de mensajes del taxi
-            while True:
-                data = client_socket.recv(1024).decode()
-                if not data:
-                    break
-                
-                self.process_taxi_message(taxi_id, json.loads(data))
-                
-        except Exception as e:
-            logger.error(f"Error en conexión de taxi: {e}")
-        finally:
-            if taxi_id is not None:
-                self.handle_taxi_disconnection(taxi_id)
-            else:
-                client_socket.close()
+    def add_location(self, loc_id: str, x: int, y: int):
+        """Añadir una localización al mapa"""
+        with self.map_lock:
+            location = Location(loc_id, x, y)
+            self.locations[loc_id] = location
+            self.map[y][x] = ('location', loc_id)
+            logger.info(f"Localización {loc_id} añadida en ({x}, {y})")
 
-    def handle_customer_connection(self, client_socket: socket.socket, address: str):
-        """Manejar la conexión de un cliente"""
+    def handle_client(self, client_socket: socket.socket, address: str):
+        """Manejar conexión de cliente"""
         try:
-            while True:
-                data = client_socket.recv(1024).decode()
-                if not data:
+            while self.running:
+                try:
+                    data = client_socket.recv(1024)
+                    if not data:
+                        break
+                        
+                    message = data.decode()
+                    logger.debug(f"Mensaje recibido de {address}: {message}")
+                    
+                    try:
+                        json_data = json.loads(message)
+                        client_type = json_data.get('type')
+                        
+                        if client_type == 'taxi':
+                            self.handle_taxi_message(client_socket, json_data, address)
+                        elif client_type == 'customer':
+                            self.handle_customer_message(client_socket, json_data, address)
+                        else:
+                            logger.warning(f"Tipo de cliente desconocido: {client_type}")
+                            response = {'status': 'error', 'message': 'Unknown client type'}
+                            client_socket.send(json.dumps(response).encode())
+                            
+                    except json.JSONDecodeError as e:
+                        logger.error(f"Error decodificando JSON: {e}, mensaje: {message}")
+                        response = {'status': 'error', 'message': 'Invalid JSON format'}
+                        client_socket.send(json.dumps(response).encode())
+                        
+                except Exception as e:
+                    logger.error(f"Error procesando mensaje: {e}")
                     break
-                
-                request = json.loads(data)
-                if request['type'] == 'service_request':
-                    self.process_service_request(request, client_socket)
-                
+                    
         except Exception as e:
-            logger.error(f"Error en conexión de cliente: {e}")
+            logger.error(f"Error en conexión con {address}: {e}")
         finally:
-            client_socket.close()
+            self.handle_client_disconnection(client_socket, address)
 
-    def process_service_request(self, request: dict, client_socket: socket.socket):
-        """Procesar una solicitud de servicio"""
-        with self.lock:
+    def handle_client_disconnection(self, client_socket: socket.socket, address: str):
+        """Manejar desconexión de cliente"""
+        # Buscar si es un taxi
+        with self.taxi_lock:
+            for taxi_id, taxi in list(self.taxis.items()):
+                if taxi.client_socket == client_socket:
+                    logger.info(f"Taxi {taxi_id} desconectado")
+                    self.remove_taxi(taxi_id)
+                    break
+        
+        client_socket.close()
+        logger.info(f"Conexión cerrada con {address}")
+
+    def handle_taxi_message(self, client_socket: socket.socket, data: Dict, address: str):
+        """Procesar mensajes de taxi"""
+        msg_type = data.get('type')
+        taxi_id = data.get('taxi_id')
+        
+        if msg_type == 'taxi':
+            # Autenticación inicial
+            with self.taxi_lock:
+                if taxi_id not in self.taxis:
+                    taxi = Taxi(
+                        id=taxi_id,
+                        state=TAXI_STATES['AVAILABLE'],
+                        position=(1, 1),
+                        client_socket=client_socket
+                    )
+                    self.taxis[taxi_id] = taxi
+                    self.update_map_taxi(taxi)
+                    response = {'status': 'OK', 'message': 'Taxi registered'}
+                else:
+                    response = {'status': 'error', 'message': 'Taxi ID already exists'}
+                
+                client_socket.send(json.dumps(response).encode())
+        
+        elif msg_type == 'position_update':
+            # Actualización de posición
+            new_pos = tuple(data.get('position', [1, 1]))
+            with self.taxi_lock:
+                if taxi_id in self.taxis:
+                    taxi = self.taxis[taxi_id]
+                    self.update_taxi_position(taxi_id, new_pos)
+                    self.broadcast_map_update()
+
+    def handle_customer_message(self, client_socket: socket.socket, data: Dict, address: str):
+        """Procesar mensajes de cliente"""
+        msg_type = data.get('type')
+        
+        if msg_type == 'service_request':
+            destination = data.get('destination')
+            customer_id = data.get('customer_id')
+            
             # Buscar taxi disponible
-            available_taxi = self.find_available_taxi()
+            taxi_id = self.find_available_taxi()
             
-            if available_taxi:
-                # Crear nuevo servicio
+            if taxi_id is not None:
+                # Crear servicio
                 service_id = f"SRV_{len(self.services) + 1}"
+                with self.service_lock:
+                    self.services[service_id] = {
+                        'id': service_id,
+                        'customer_id': customer_id,
+                        'taxi_id': taxi_id,
+                        'destination': destination,
+                        'state': SERVICE_STATES['ACCEPTED']
+                    }
                 
-                # Obtener posición actual del cliente
-                client_pos = request.get('current_position', None)
+                # Notificar al taxi
+                self.assign_service_to_taxi(taxi_id, service_id, destination)
                 
-                service = {
-                    'id': service_id,
-                    'customer_socket': client_socket,
-                    'taxi_id': available_taxi,
-                    'pickup_location': client_pos,
-                    'destination': request['destination'],
-                    'state': SERVICE_STATES['ACCEPTED']
-                }
-                self.services[service_id] = service
-                
-                # Actualizar estado del taxi
-                self.taxis[available_taxi]['state'] = TAXI_STATES['BUSY']
-                self.taxis[available_taxi]['current_service'] = service_id
-                
-                # Enviar confirmación al cliente
+                # Responder al cliente
                 response = {
                     'status': 'OK',
                     'service_id': service_id,
-                    'taxi_id': available_taxi,
-                    'taxi_position': self.taxis[available_taxi].get('position', (1, 1))
+                    'taxi_id': taxi_id
                 }
-                client_socket.send(json.dumps(response).encode())
-                
-                # Enviar orden al taxi
-                taxi_order = {
-                    'type': 'new_service',
-                    'service_id': service_id,
-                    'pickup_location': client_pos,
-                    'destination': request['destination']
-                }
-                self.taxis[available_taxi]['socket'].send(json.dumps(taxi_order).encode())
-                
-                logger.info(f"Servicio {service_id} asignado al taxi {available_taxi}")
             else:
-                # No hay taxis disponibles
                 response = {
-                    'status': 'ERROR',
+                    'status': 'error',
                     'message': 'No hay taxis disponibles'
                 }
-                client_socket.send(json.dumps(response).encode())
-                logger.warning("Servicio rechazado: No hay taxis disponibles")
+            
+            client_socket.send(json.dumps(response).encode())
 
     def find_available_taxi(self) -> Optional[int]:
-        """Encontrar el taxi disponible más cercano"""
-        available_taxis = []
-        
-        for taxi_id, taxi_info in self.taxis.items():
-            if taxi_info['state'] == TAXI_STATES['AVAILABLE']:
-                available_taxis.append((taxi_id, taxi_info))
-        
-        if not available_taxis:
-            return None
-            
-        # Si solo hay un taxi disponible, devolverlo
-        if len(available_taxis) == 1:
-            return available_taxis[0][0]
-            
-        # TODO: Implementar lógica para seleccionar el taxi más cercano
-        # Por ahora, devolver el primer taxi disponible
-        return available_taxis[0][0]
+        """Encontrar un taxi disponible"""
+        with self.taxi_lock:
+            for taxi_id, taxi in self.taxis.items():
+                if taxi.state == TAXI_STATES['AVAILABLE']:
+                    return taxi_id
+        return None
 
-    def handle_taxi_disconnection(self, taxi_id: int):
-        """Manejar la desconexión de un taxi"""
-        with self.lock:
+    def assign_service_to_taxi(self, taxi_id: int, service_id: str, destination: str):
+        """Asignar servicio a un taxi"""
+        with self.taxi_lock:
             if taxi_id in self.taxis:
-                # Cerrar socket
-                self.taxis[taxi_id]['socket'].close()
-                # Eliminar taxi del mapa
-                self.map_manager.remove_taxi(taxi_id)
-                # Eliminar taxi del registro
-                del self.taxis[taxi_id]
-                logger.info(f"Taxi {taxi_id} desconectado")
-
-    def process_taxi_message(self, taxi_id: int, message: dict):
-        """Procesar mensajes recibidos de los taxis"""
-        try:
-            msg_type = message.get('type')
-            
-            if msg_type == 'position_update':
-                # Actualizar posición del taxi en el mapa
-                x, y = message['position']
-                self.map_manager.move_taxi(taxi_id, x, y)
+                taxi = self.taxis[taxi_id]
+                taxi.state = TAXI_STATES['BUSY']
+                taxi.current_service = service_id
                 
-            elif msg_type == 'service_completed':
-                # Procesar finalización de servicio
-                service_id = message['service_id']
-                if service_id in self.services:
-                    service = self.services[service_id]
-                    service['state'] = SERVICE_STATES['COMPLETED']
-                    
-                    # Notificar al cliente
-                    completion_msg = {
-                        'type': 'service_completed',
-                        'service_id': service_id
-                    }
-                    service['customer_socket'].send(json.dumps(completion_msg).encode())
-                    
-                    # Actualizar estado del taxi
-                    self.taxis[taxi_id]['state'] = TAXI_STATES['AVAILABLE']
-                    self.taxis[taxi_id]['current_service'] = None
-                    
-                    logger.info(f"Servicio {service_id} completado por taxi {taxi_id}")
-            
-        except Exception as e:
-            logger.error(f"Error procesando mensaje de taxi: {e}")
+                # Obtener coordenadas del destino
+                if destination in self.locations:
+                    dest_loc = self.locations[destination]
+                    taxi.destination = (dest_loc.x, dest_loc.y)
+                
+                # Notificar al taxi
+                message = {
+                    'type': 'new_service',
+                    'service_id': service_id,
+                    'destination': destination
+                }
+                taxi.client_socket.send(json.dumps(message).encode())
+
+    def update_taxi_position(self, taxi_id: int, new_pos: Tuple[int, int]):
+        """Actualizar posición de un taxi"""
+        with self.map_lock:
+            if taxi_id in self.taxis:
+                taxi = self.taxis[taxi_id]
+                old_pos = taxi.position
+                
+                # Limpiar posición anterior
+                x, y = old_pos
+                if self.map[y][x] and self.map[y][x][0] == 'taxi':
+                    self.map[y][x] = None
+                
+                # Actualizar nueva posición
+                new_x, new_y = new_pos
+                taxi.position = new_pos
+                self.map[new_y][new_x] = ('taxi', taxi_id)
+
+    def update_map_taxi(self, taxi: Taxi):
+        """Actualizar taxi en el mapa"""
+        with self.map_lock:
+            x, y = taxi.position
+            self.map[y][x] = ('taxi', taxi.id)
+
+    def remove_taxi(self, taxi_id: int):
+        """Eliminar un taxi del sistema"""
+        with self.taxi_lock, self.map_lock:
+            if taxi_id in self.taxis:
+                taxi = self.taxis[taxi_id]
+                x, y = taxi.position
+                self.map[y][x] = None
+                del self.taxis[taxi_id]
+
+    def broadcast_map_update(self):
+        """Enviar actualización del mapa a todos los taxis"""
+        map_state = self.get_map_state()
+        update = {
+            'type': 'map_update',
+            'map': map_state
+        }
+        
+        with self.taxi_lock:
+            for taxi in self.taxis.values():
+                try:
+                    taxi.client_socket.send(json.dumps(update).encode())
+                except:
+                    pass
+
+    def get_map_state(self) -> List[List]:
+        """Obtener estado actual del mapa"""
+        with self.map_lock:
+            return [row[:] for row in self.map]
 
     def run(self):
         """Iniciar el servidor central"""
         logger.info("Iniciando servidor central...")
         try:
-            while True:
-                client_socket, address = self.server_socket.accept()
-                logger.info(f"Nueva conexión desde {address}")
-                
-                # Recibir tipo de cliente
-                client_type = json.loads(client_socket.recv(1024).decode())['type']
-                
-                if client_type == 'taxi':
-                    threading.Thread(target=self.handle_taxi_connection,
+            while self.running:
+                try:
+                    client_socket, address = self.server_socket.accept()
+                    logger.info(f"Nueva conexión desde {address}")
+                    threading.Thread(target=self.handle_client,
                                   args=(client_socket, address)).start()
-                elif client_type == 'customer':
-                    threading.Thread(target=self.handle_customer_connection,
-                                  args=(client_socket, address)).start()
-                
+                except Exception as e:
+                    logger.error(f"Error aceptando conexión: {e}")
+                    
         except KeyboardInterrupt:
-            logger.info("Apagando servidor central...")
+            logger.info("Apagando servidor...")
         finally:
-            self.server_socket.close()
+            self.cleanup()
+
+    def cleanup(self):
+        """Limpieza al cerrar el servidor"""
+        self.running = False
+        
+        # Cerrar conexiones de taxis
+        with self.taxi_lock:
+            for taxi in self.taxis.values():
+                if taxi.client_socket:
+                    try:
+                        taxi.client_socket.close()
+                    except:
+                        pass
+        
+        # Cerrar socket del servidor
+        self.server_socket.close()
 
 if __name__ == "__main__":
     server = CentralServer()
