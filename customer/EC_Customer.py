@@ -25,7 +25,7 @@ class Customer:
         self.assigned_taxi: Optional[int] = None
         self.service_status = None
         self.taxi_position = "Unknown"
-        self.central_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.central_socket = None
         
         self.running = True
         self.lock = threading.Lock()
@@ -63,6 +63,7 @@ class Customer:
                 time.sleep(1)
         
         # Reset central_socket to None if all attempts fail
+        self.central_socket.close()
         self.central_socket = None
         return False
 
@@ -121,18 +122,27 @@ class Customer:
 
     def send_message(self, socket, message: dict):
         """Send a JSON-encoded message to a socket."""
-        try:
-            socket.send(json.dumps(message).encode())
-        except Exception as e:
-            logger.error(f"Error sending message: {e}")
+        if socket:
+            try:
+                socket.send(json.dumps(message).encode())
+            except Exception as e:
+                logger.error(f"Error sending message: {e}")
+        else:
+            logger.error("Attempted to send message on a closed or uninitialized socket.")
+
 
     def receive_message(self, socket, buffer_size=1024) -> dict:
         """Receive a JSON-encoded message from a socket."""
-        try:
-            return json.loads(socket.recv(buffer_size).decode())
-        except Exception as e:
-            logger.error(f"Error receiving message: {e}")
+        if socket:
+            try:
+                return json.loads(socket.recv(buffer_size).decode())
+            except Exception as e:
+                logger.error(f"Error receiving message: {e}")
+                return {}
+        else:
+            logger.error("Attempted to receive message on a closed or uninitialized socket.")
             return {}
+
 
     def handle_service_update(self, message: Dict):
         """Process a service update message from Kafka."""
@@ -236,7 +246,12 @@ class Customer:
         self.running = False
         self.kafka.close()
         if self.central_socket:
-            self.central_socket.close()
+            try:
+                self.central_socket.close()
+            except Exception as e:
+                logger.error(f"Error closing socket: {e}")
+            finally:
+                self.central_socket = None
 
 
 if __name__ == "__main__":
