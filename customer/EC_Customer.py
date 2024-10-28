@@ -223,6 +223,9 @@ class Customer:
 
     def run(self):
         """Start the customer client."""
+        host = '192.168.56.123'
+        port = 50051
+
         display_thread = threading.Thread(target=self.display_loop)
         display_thread.daemon = True
         display_thread.start()
