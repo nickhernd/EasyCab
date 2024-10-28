@@ -39,6 +39,31 @@ class Customer:
         # Cargar servicios
         self.load_services()
 
+    def connect_to_central(self, host: str, port: int) -> bool:
+        """Conectar con el servidor central"""
+        try:
+            logger.info(f"Conectando a central {host}:{port}")
+            self.central_socket.connect((host, port))
+            
+            # Enviar autenticación
+            auth_data = {
+                'type': 'customer',
+                'customer_id': self.customer_id
+            }
+            self.central_socket.send(json.dumps(auth_data).encode())
+            
+            response = json.loads(self.central_socket.recv(1024).decode())
+            if response.get('status') == 'OK':
+                logger.info("Conectado a central")
+                return True
+            
+            logger.error(f"Error conectando: {response}")
+            return False
+            
+        except Exception as e:
+            logger.error(f"Error conectando a central: {e}")
+            return False
+
     def setup_kafka(self):
         """Configurar conexiones Kafka"""
         # Suscribirse a actualizaciones de servicio
@@ -69,35 +94,26 @@ class Customer:
             return False
 
     def request_service(self, destination: str) -> bool:
-        """Solicitar un servicio de taxi"""
+        """Solicitar servicio de taxi"""
         try:
-            logger.info(f"Intentando solicitar servicio a {destination}")
             request = {
                 'type': 'service_request',
                 'customer_id': self.customer_id,
-                'destination': destination,
-                'timestamp': time.time()
+                'destination': destination
             }
             
-            logger.debug(f"Enviando solicitud: {request}")
-            self.send_to_central(request)
+            logger.info(f"Solicitando servicio a {destination}")
+            self.central_socket.send(json.dumps(request).encode())
             
-            # Esperar respuesta con timeout
-            self.central_socket.settimeout(5.0)
-            try:
-                response = json.loads(self.central_socket.recv(1024).decode())
-                logger.debug(f"Respuesta recibida: {response}")
-                
-                if response.get('status') == 'OK':
-                    self.current_service = response.get('service_id')
-                    taxi_id = response.get('taxi_id')
-                    self.display_message(f"Servicio aceptado - Taxi {taxi_id} asignado")
-                    return True
-                else:
-                    self.display_message(f"Servicio rechazado: {response.get('message')}")
-                    return False
-            except socket.timeout:
-                logger.error("Timeout esperando respuesta de la central")
+            response = json.loads(self.central_socket.recv(1024).decode())
+            
+            if response.get('status') == 'OK':
+                self.current_service = response.get('service_id')
+                taxi_id = response.get('taxi_id')
+                print(f"\nServicio aceptado - Taxi {taxi_id} asignado")
+                return True
+            else:
+                print(f"\nServicio rechazado: {response.get('message')}")
                 return False
                 
         except Exception as e:
