@@ -18,14 +18,16 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 class Customer:
-    def __init__(self, customer_id: str, kafka_url: str):
+    def __init__(self, customer_id: str, kafka_url: str, host: str, port: int):
         self.customer_id = customer_id
+        self.host = host
+        self.port = port
         self.pending_services: List[str] = []
         self.current_service: Optional[str] = None
         self.assigned_taxi: Optional[int] = None
         self.service_status = None
         self.taxi_position = "Unknown"
-        self.central_socket = None
+        self.central_socket = None  # Socket starts as None
         
         self.running = True
         self.lock = threading.Lock()
@@ -40,13 +42,18 @@ class Customer:
         # Load services
         self.load_services()
 
-    def connect_to_central(self, host: str, port: int, retries: int = 3) -> bool:
+    def connect_to_central(self, retries: int = 3) -> bool:
         """Attempt to connect to the central server with retry logic."""
+        # Close any existing socket before reconnecting
+        if self.central_socket:
+            self.central_socket.close()
+
+        self.central_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+
         for attempt in range(retries):
             try:
-                logger.info(f"Connecting to central server {host}:{port} (Attempt {attempt+1}/{retries})")
-                self.central_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                self.central_socket.connect((host, port))
+                logger.info(f"Connecting to central server {self.host}:{self.port} (Attempt {attempt+1}/{retries})")
+                self.central_socket.connect((self.host, self.port))
                 
                 # Send authentication data
                 auth_data = {'type': 'customer', 'customer_id': self.customer_id}
@@ -62,36 +69,10 @@ class Customer:
                 logger.error(f"Connection attempt {attempt+1} failed: {e}")
                 time.sleep(1)
         
-        # Reset central_socket to None if all attempts fail
+        # If connection fails, close the socket and set it to None
         self.central_socket.close()
         self.central_socket = None
         return False
-
-    def setup_kafka(self):
-        """Configure Kafka subscriptions."""
-        self.kafka.subscribe(
-            TOPICS['SERVICE_UPDATES'],
-            self.handle_service_update,
-            f"customer_{self.customer_id}_service"
-        )
-        self.kafka.subscribe(
-            TOPICS['TAXI_POSITIONS'],
-            self.handle_taxi_position,
-            f"customer_{self.customer_id}_positions"
-        )
-
-    def load_services(self) -> bool:
-        """Load services from a JSON file."""
-        try:
-            logger.info("Attempting to load services...")
-            with open('data/EC_Requests.json', 'r') as f:
-                data = json.load(f)
-                self.pending_services = [req['Id'] for req in data['Requests']]
-            logger.info(f"Loaded {len(self.pending_services)} services: {self.pending_services}")
-            return True
-        except Exception as e:
-            logger.error(f"Error loading services: {e}")
-            return False
 
     def request_service(self, destination: str) -> bool:
         """Request a taxi service."""
@@ -120,6 +101,25 @@ class Customer:
             logger.error(f"Error requesting service: {e}")
             return False
 
+    def request_next_service(self):
+        """Request the next service in the pending queue with connection check."""
+        with self.lock:
+            # Ensure connection before requesting service
+            if not self.central_socket and not self.connect_to_central():
+                self.display_message("Unable to connect to central server. Retrying...")
+                threading.Timer(5.0, self.request_next_service).start()
+                return
+            
+            if not self.pending_services:
+                self.display_message("No more pending services")
+                return
+            
+            destination = self.pending_services.pop(0)
+            self.display_message(f"Requesting service to {destination}")
+            if not self.request_service(destination):
+                self.pending_services.insert(0, destination)
+                threading.Timer(5.0, self.request_next_service).start()
+
     def send_message(self, socket, message: dict):
         """Send a JSON-encoded message to a socket."""
         if socket:
@@ -129,7 +129,6 @@ class Customer:
                 logger.error(f"Error sending message: {e}")
         else:
             logger.error("Attempted to send message on a closed or uninitialized socket.")
-
 
     def receive_message(self, socket, buffer_size=1024) -> dict:
         """Receive a JSON-encoded message from a socket."""
@@ -143,106 +142,28 @@ class Customer:
             logger.error("Attempted to receive message on a closed or uninitialized socket.")
             return {}
 
-
-    def handle_service_update(self, message: Dict):
-        """Process a service update message from Kafka."""
-        payload = message.get('payload', {})
-        if payload.get('customer_id') == self.customer_id:
-            update_type = payload.get('update_type')
-            service_id = payload.get('service_id')
-            
-            handler_mapping = {
-                'service_accepted': self.handle_service_accepted,
-                'service_completed': self.handle_service_completed,
-                'service_cancelled': self.handle_service_cancelled,
-                'taxi_status': self.handle_taxi_status_update
-            }
-            handler = handler_mapping.get(update_type)
-            if handler:
-                handler(payload)
-            else:
-                logger.warning(f"Unhandled service update type: {update_type}")
-
-    def handle_service_accepted(self, data: Dict):
-        """Handle service acceptance updates."""
-        with self.lock:
-            self.current_service = data['service_id']
-            self.assigned_taxi = data['taxi_id']
-            self.service_status = 'ACCEPTED'
-            self.display_message(f"Service accepted - Taxi {self.assigned_taxi}")
-
-    def handle_service_completed(self, service_id: str):
-        """Handle service completion updates."""
-        if service_id == self.current_service:
-            self.display_message(f"Service {service_id} completed")
-            self.reset_service()
-            threading.Timer(4.0, self.request_next_service).start()
-
-    def reset_service(self):
-        """Reset service variables to their default state."""
-        self.current_service = None
-        self.assigned_taxi = None
-        self.service_status = None
-
-    def handle_taxi_position(self, message: Dict):
-        """Handle taxi position updates."""
-        payload = message.get('payload', {})
-        if payload.get('taxi_id') == self.assigned_taxi:
-            self.taxi_position = payload.get('position', "Unknown")
-            self.update_display()
-
-    def request_next_service(self):
-        """Request the next service in the pending queue."""
-        with self.lock:
-            if not self.pending_services:
-                self.display_message("No more pending services")
-                return
-            
-            destination = self.pending_services.pop(0)
-            self.display_message(f"Requesting service to {destination}")
-            if not self.request_service(destination):
-                self.pending_services.insert(0, destination)
-                threading.Timer(5.0, self.request_next_service).start()
-
-    def display_message(self, message: str):
-        """Display a message on the console."""
-        with self.display_lock:
-            print(f"\n{self.customer_id}: {message}")
-
-    def update_display(self):
-        """Update the user interface to show the current state."""
-        with self.display_lock:
-            os.system('cls' if os.name == 'nt' else 'clear')
-            print(f"\n=== Customer {self.customer_id} ===")
-            print(f"Current service: {self.current_service}")
-            print(f"Status: {self.service_status}")
-            print(f"Assigned taxi: {self.assigned_taxi}")
-            print(f"Pending services: {len(self.pending_services)}")
-            print(f"Taxi position: {self.taxi_position}")
-            print("=" * 40)
-
     def run(self):
-        """Start the customer client."""
-        host = '192.168.56.123'
-        port = 50051
+        """Start the customer client and ensure connection to central server."""
+        # Attempt to connect to the central server before proceeding
+        if not self.connect_to_central():
+            logger.error("Failed to connect to central server. Exiting client.")
+            self.running = False
+            return  # Exit if unable to connect
 
+        # Start the display thread
         display_thread = threading.Thread(target=self.display_loop)
         display_thread.daemon = True
         display_thread.start()
         
+        # Start requesting the first service
         self.request_next_service()
         
+        # Main loop
         try:
             while self.running:
                 time.sleep(1)
         except KeyboardInterrupt:
             self.cleanup()
-
-    def display_loop(self):
-        """Periodically refresh the display."""
-        while self.running:
-            self.update_display()
-            time.sleep(1)
 
     def cleanup(self):
         """Clean up resources upon exiting."""
@@ -264,9 +185,11 @@ if __name__ == "__main__":
     parser.add_argument('kafka_ip', help='IP address of Kafka broker')
     parser.add_argument('kafka_port', type=int, help='Port of Kafka broker')
     parser.add_argument('customer_id', help='Customer ID')
+    parser.add_argument('central_host', help='IP address of Central Server')
+    parser.add_argument('central_port', type=int, help='Port of Central Server')
     
     args = parser.parse_args()
     
     kafka_url = f"{args.kafka_ip}:{args.kafka_port}"
-    customer = Customer(args.customer_id, kafka_url)
+    customer = Customer(args.customer_id, kafka_url, args.central_host, args.central_port)
     customer.run()
