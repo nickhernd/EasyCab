@@ -7,7 +7,7 @@ import time
 import logging
 from typing import List, Dict, Optional
 
-# Añadir el directorio raíz al path
+# Add the root directory to the path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from common.kafka_utils import KafkaClient, TOPICS, create_message
 
@@ -24,8 +24,8 @@ class Customer:
         self.current_service: Optional[str] = None
         self.assigned_taxi: Optional[int] = None
         self.service_status = None
+        self.taxi_position = "Unknown"
         
-        # Control
         self.running = True
         self.lock = threading.Lock()
         
@@ -36,44 +36,37 @@ class Customer:
         # UI
         self.display_lock = threading.Lock()
         
-        # Cargar servicios
+        # Load services
         self.load_services()
 
-    def connect_to_central(self, host: str, port: int) -> bool:
-        """Conectar con el servidor central"""
-        try:
-            logger.info(f"Conectando a central {host}:{port}")
-            self.central_socket.connect((host, port))
-            
-            # Enviar autenticación
-            auth_data = {
-                'type': 'customer',
-                'customer_id': self.customer_id
-            }
-            self.central_socket.send(json.dumps(auth_data).encode())
-            
-            response = json.loads(self.central_socket.recv(1024).decode())
-            if response.get('status') == 'OK':
-                logger.info("Conectado a central")
-                return True
-            
-            logger.error(f"Error conectando: {response}")
-            return False
-            
-        except Exception as e:
-            logger.error(f"Error conectando a central: {e}")
-            return False
+    def connect_to_central(self, host: str, port: int, retries: int = 3) -> bool:
+        """Connect to the central server with retry logic."""
+        for attempt in range(retries):
+            try:
+                logger.info(f"Connecting to central server {host}:{port} (Attempt {attempt+1}/{retries})")
+                self.central_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                self.central_socket.connect((host, port))
+                
+                auth_data = {'type': 'customer', 'customer_id': self.customer_id}
+                self.send_message(self.central_socket, auth_data)
+                
+                response = self.receive_message(self.central_socket)
+                if response.get('status') == 'OK':
+                    logger.info("Connected to central server")
+                    return True
+                logger.error(f"Connection error: {response}")
+            except Exception as e:
+                logger.error(f"Connection attempt {attempt+1} failed: {e}")
+                time.sleep(1)
+        return False
 
     def setup_kafka(self):
-        """Configurar conexiones Kafka"""
-        # Suscribirse a actualizaciones de servicio
+        """Configure Kafka subscriptions."""
         self.kafka.subscribe(
             TOPICS['SERVICE_UPDATES'],
             self.handle_service_update,
             f"customer_{self.customer_id}_service"
         )
-        
-        # Suscribirse a posiciones de taxis
         self.kafka.subscribe(
             TOPICS['TAXI_POSITIONS'],
             self.handle_taxi_position,
@@ -81,131 +74,139 @@ class Customer:
         )
 
     def load_services(self) -> bool:
-        """Cargar servicios desde archivo JSON"""
+        """Load services from JSON file."""
         try:
-            logger.info("Intentando cargar servicios...")
+            logger.info("Attempting to load services...")
             with open('data/EC_Requests.json', 'r') as f:
                 data = json.load(f)
                 self.pending_services = [req['Id'] for req in data['Requests']]
-            logger.info(f"Cargados {len(self.pending_services)} servicios: {self.pending_services}")
+            logger.info(f"Loaded {len(self.pending_services)} services: {self.pending_services}")
             return True
         except Exception as e:
-            logger.error(f"Error cargando servicios: {e}, {str(e)}")
+            logger.error(f"Error loading services: {e}")
             return False
 
     def request_service(self, destination: str) -> bool:
-        """Solicitar servicio de taxi"""
+        """Request a taxi service."""
         try:
             request = {
                 'type': 'service_request',
                 'customer_id': self.customer_id,
                 'destination': destination
             }
-            
-            logger.info(f"Solicitando servicio a {destination}")
-            self.central_socket.send(json.dumps(request).encode())
-            
-            response = json.loads(self.central_socket.recv(1024).decode())
+            self.send_message(self.central_socket, request)
+            response = self.receive_message(self.central_socket)
             
             if response.get('status') == 'OK':
                 self.current_service = response.get('service_id')
-                taxi_id = response.get('taxi_id')
-                print(f"\nServicio aceptado - Taxi {taxi_id} asignado")
+                self.assigned_taxi = response.get('taxi_id')
+                self.display_message(f"Service accepted - Taxi {self.assigned_taxi} assigned")
                 return True
             else:
-                print(f"\nServicio rechazado: {response.get('message')}")
+                self.display_message(f"Service rejected: {response.get('message')}")
                 return False
-                
         except Exception as e:
-            logger.error(f"Error solicitando servicio: {e}")
+            logger.error(f"Error requesting service: {e}")
             return False
 
+    def send_message(self, socket, message: dict):
+        """Send a JSON-encoded message."""
+        try:
+            socket.send(json.dumps(message).encode())
+        except Exception as e:
+            logger.error(f"Error sending message: {e}")
+
+    def receive_message(self, socket, buffer_size=1024) -> dict:
+        """Receive a JSON-encoded message."""
+        try:
+            return json.loads(socket.recv(buffer_size).decode())
+        except Exception as e:
+            logger.error(f"Error receiving message: {e}")
+            return {}
 
     def handle_service_update(self, message: Dict):
-        """Procesar actualización de servicio"""
+        """Process a service update message."""
         payload = message.get('payload', {})
         if payload.get('customer_id') == self.customer_id:
             update_type = payload.get('update_type')
             service_id = payload.get('service_id')
             
-            if update_type == 'service_accepted':
-                self.handle_service_accepted(payload)
-            elif update_type == 'service_completed':
-                self.handle_service_completed(service_id)
-            elif update_type == 'service_cancelled':
-                self.handle_service_cancelled(service_id)
-            elif update_type == 'taxi_status':
-                self.handle_taxi_status_update(payload)
+            handler_mapping = {
+                'service_accepted': self.handle_service_accepted,
+                'service_completed': self.handle_service_completed,
+                'service_cancelled': self.handle_service_cancelled,
+                'taxi_status': self.handle_taxi_status_update
+            }
+            handler = handler_mapping.get(update_type)
+            if handler:
+                handler(payload)
+            else:
+                logger.warning(f"Unhandled service update type: {update_type}")
 
     def handle_service_accepted(self, data: Dict):
-        """Procesar aceptación de servicio"""
+        """Handle service acceptance."""
         with self.lock:
             self.current_service = data['service_id']
             self.assigned_taxi = data['taxi_id']
             self.service_status = 'ACCEPTED'
-            self.display_message(f"Servicio aceptado - Taxi {self.assigned_taxi}")
+            self.display_message(f"Service accepted - Taxi {self.assigned_taxi}")
 
     def handle_service_completed(self, service_id: str):
-        """Procesar finalización de servicio"""
+        """Handle service completion."""
         if service_id == self.current_service:
-            self.display_message(f"Servicio {service_id} completado")
-            self.current_service = None
-            self.assigned_taxi = None
-            self.service_status = None
-            
-            # Programar siguiente servicio
+            self.display_message(f"Service {service_id} completed")
+            self.reset_service()
             threading.Timer(4.0, self.request_next_service).start()
 
+    def reset_service(self):
+        """Reset service variables."""
+        self.current_service = None
+        self.assigned_taxi = None
+        self.service_status = None
+
     def handle_taxi_position(self, message: Dict):
-        """Procesar actualización de posición del taxi asignado"""
+        """Handle taxi position update."""
         payload = message.get('payload', {})
-        taxi_id = payload.get('taxi_id')
-        
-        if taxi_id == self.assigned_taxi:
-            position = payload.get('position')
-            self.update_taxi_position(position)
+        if payload.get('taxi_id') == self.assigned_taxi:
+            self.taxi_position = payload.get('position', "Unknown")
+            self.update_display()
 
     def request_next_service(self):
-        """Solicitar siguiente servicio"""
+        """Request the next service."""
         with self.lock:
             if not self.pending_services:
-                self.display_message("No hay más servicios pendientes")
+                self.display_message("No more pending services")
                 return
             
             destination = self.pending_services.pop(0)
-            self.display_message(f"Solicitando servicio a {destination}")
-            
+            self.display_message(f"Requesting service to {destination}")
             if not self.request_service(destination):
-                # Reintentar en caso de fallo
                 self.pending_services.insert(0, destination)
                 threading.Timer(5.0, self.request_next_service).start()
 
     def display_message(self, message: str):
-        """Mostrar mensaje en pantalla"""
+        """Display a message on the console."""
         with self.display_lock:
             print(f"\n{self.customer_id}: {message}")
 
     def update_display(self):
-        """Actualizar interfaz"""
+        """Update the user interface."""
         with self.display_lock:
             os.system('cls' if os.name == 'nt' else 'clear')
-            print(f"\n=== Cliente {self.customer_id} ===")
-            print(f"Servicio actual: {self.current_service}")
-            print(f"Estado: {self.service_status}")
-            print(f"Taxi asignado: {self.assigned_taxi}")
-            print(f"Servicios pendientes: {len(self.pending_services)}")
-            if self.assigned_taxi:
-                print(f"Posición del taxi: {getattr(self, 'taxi_position', 'Desconocida')}")
+            print(f"\n=== Customer {self.customer_id} ===")
+            print(f"Current service: {self.current_service}")
+            print(f"Status: {self.service_status}")
+            print(f"Assigned taxi: {self.assigned_taxi}")
+            print(f"Pending services: {len(self.pending_services)}")
+            print(f"Taxi position: {self.taxi_position}")
             print("=" * 40)
 
     def run(self):
-        """Iniciar cliente"""
-        # Iniciar thread de display
+        """Start the customer client."""
         display_thread = threading.Thread(target=self.display_loop)
         display_thread.daemon = True
         display_thread.start()
         
-        # Solicitar primer servicio
         self.request_next_service()
         
         try:
@@ -215,15 +216,18 @@ class Customer:
             self.cleanup()
 
     def display_loop(self):
-        """Actualizar display periódicamente"""
+        """Periodically update the display."""
         while self.running:
             self.update_display()
             time.sleep(1)
 
     def cleanup(self):
-        """Limpieza al cerrar"""
+        """Cleanup resources."""
         self.running = False
         self.kafka.close()
+        if self.central_socket:
+            self.central_socket.close()
+
 
 if __name__ == "__main__":
     import argparse
