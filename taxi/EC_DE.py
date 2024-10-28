@@ -39,7 +39,7 @@ class DigitalEngine:
         """Conectar con el servidor central"""
         try:
             self.central_socket.connect((CENTRAL_HOST, CENTRAL_PORT))
-            
+            print("hola con el servidor")
             # Enviar información de autenticación
             auth_data = {
                 'type': 'taxi',
