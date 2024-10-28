@@ -47,7 +47,7 @@ class DigitalEngine:
     def connect_to_central(self, host: str, port: int) -> bool:
         """Conectar con el servidor central"""
         try:
-            logger.info(f"Conectando a central {host}:{port}...")
+            logger.info(f"Intentando conectar a central {host}:{port}...")
             self.central_socket.connect((host, port))
             
             # Autenticación
@@ -55,16 +55,24 @@ class DigitalEngine:
                 'type': 'taxi',
                 'taxi_id': self.taxi_id
             }
+            logger.debug(f"Enviando datos de autenticación: {auth_data}")
             self.central_socket.send(json.dumps(auth_data).encode())
             
-            # Esperar respuesta
-            response = json.loads(self.central_socket.recv(1024).decode())
-            if response.get('status') == 'OK':
-                logger.info("Conectado a central correctamente")
-                return True
-            
-            logger.error(f"Error en autenticación: {response}")
-            return False
+            # Esperar respuesta con timeout
+            self.central_socket.settimeout(5.0)
+            try:
+                response = json.loads(self.central_socket.recv(1024).decode())
+                logger.debug(f"Respuesta de autenticación: {response}")
+                
+                if response.get('status') == 'OK':
+                    logger.info("Conectado a central correctamente")
+                    return True
+                
+                logger.error(f"Error en autenticación: {response}")
+                return False
+            except socket.timeout:
+                logger.error("Timeout esperando respuesta de autenticación")
+                return False
             
         except Exception as e:
             logger.error(f"Error conectando a central: {e}")

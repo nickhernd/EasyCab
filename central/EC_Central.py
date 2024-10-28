@@ -97,41 +97,59 @@ class CentralServer:
     def handle_client(self, client_socket: socket.socket, address: str):
         """Manejar conexión de cliente"""
         try:
+            logger.info(f"Manejando nueva conexión desde {address}")
             while self.running:
                 try:
-                    data = client_socket.recv(1024)
+                    data = client_socket.recv(1024).decode()
                     if not data:
+                        logger.info(f"Conexión cerrada por {address}")
                         break
                         
-                    message = data.decode()
-                    logger.debug(f"Mensaje recibido de {address}: {message}")
+                    logger.debug(f"Datos recibidos de {address}: {data}")
+                    message = json.loads(data)
                     
-                    try:
-                        json_data = json.loads(message)
-                        client_type = json_data.get('type')
-                        
-                        if client_type == 'taxi':
-                            self.handle_taxi_message(client_socket, json_data, address)
-                        elif client_type == 'customer':
-                            self.handle_customer_message(client_socket, json_data, address)
-                        else:
-                            logger.warning(f"Tipo de cliente desconocido: {client_type}")
-                            response = {'status': 'error', 'message': 'Unknown client type'}
-                            client_socket.send(json.dumps(response).encode())
+                    client_type = message.get('type')
+                    logger.info(f"Tipo de cliente conectado: {client_type}")
+                    
+                    if client_type == 'taxi':
+                        taxi_id = message.get('taxi_id')
+                        logger.info(f"Autenticando taxi {taxi_id}")
+                        with self.taxi_lock:
+                            self.taxis[taxi_id] = {
+                                'socket': client_socket,
+                                'address': address,
+                                'state': 'AVAILABLE',
+                                'current_service': None
+                            }
+                            self.map_manager.add_taxi(taxi_id, 1, 1, 'AVAILABLE')
                             
-                    except json.JSONDecodeError as e:
-                        logger.error(f"Error decodificando JSON: {e}, mensaje: {message}")
-                        response = {'status': 'error', 'message': 'Invalid JSON format'}
+                        # Enviar respuesta
+                        response = {'status': 'OK', 'message': 'Taxi registered'}
+                        client_socket.send(json.dumps(response).encode())
+                        logger.info(f"Taxi {taxi_id} registrado correctamente")
+                        
+                    elif client_type == 'customer':
+                        customer_id = message.get('customer_id')
+                        logger.info(f"Cliente {customer_id} conectado")
+                        response = {'status': 'OK', 'message': 'Cliente conectado'}
                         client_socket.send(json.dumps(response).encode())
                         
+                    elif client_type == 'service_request':
+                        self.handle_service_request(message, client_socket)
+                    else:
+                        logger.warning(f"Tipo de cliente desconocido: {client_type}")
+                        
+                except json.JSONDecodeError as e:
+                    logger.error(f"Error decodificando JSON de {address}: {e}")
                 except Exception as e:
-                    logger.error(f"Error procesando mensaje: {e}")
+                    logger.error(f"Error procesando mensaje de {address}: {e}")
                     break
                     
         except Exception as e:
             logger.error(f"Error en conexión con {address}: {e}")
         finally:
-            self.handle_client_disconnection(client_socket, address)
+            logger.info(f"Cerrando conexión con {address}")
+            client_socket.close()
 
     def handle_client_disconnection(self, client_socket: socket.socket, address: str):
         """Manejar desconexión de cliente"""
@@ -142,9 +160,61 @@ class CentralServer:
                     logger.info(f"Taxi {taxi_id} desconectado")
                     self.remove_taxi(taxi_id)
                     break
+
+    def handle_service_request(self, request: dict, client_socket: socket.socket):
+        """Procesar solicitud de servicio"""
+        logger.info(f"Procesando solicitud de servicio: {request}")
+        
+        customer_id = request.get('customer_id')
+        destination = request.get('destination')
+        
+        # Buscar taxi disponible
+        taxi_id = self.find_available_taxi()
+        logger.debug(f"Taxi encontrado: {taxi_id}")
+        
+        if taxi_id:
+            service_id = f"SRV_{len(self.services) + 1}"
+            with self.service_lock:
+                self.services[service_id] = {
+                    'id': service_id,
+                    'customer_id': customer_id,
+                    'taxi_id': taxi_id,
+                    'destination': destination,
+                    'state': 'ACCEPTED'
+                }
+                
+                # Asignar servicio al taxi
+                taxi = self.taxis[taxi_id]
+                taxi['state'] = 'BUSY'
+                taxi['current_service'] = service_id
+                
+                # Notificar al taxi
+                taxi_message = {
+                    'type': 'new_service',
+                    'service_id': service_id,
+                    'destination': destination
+                }
+                taxi['socket'].send(json.dumps(taxi_message).encode())
+                
+                # Responder al cliente
+                response = {
+                    'status': 'OK',
+                    'service_id': service_id,
+                    'taxi_id': taxi_id
+                }
+                
+                logger.info(f"Servicio {service_id} asignado al taxi {taxi_id}")
+        else:
+            response = {
+                'status': 'ERROR',
+                'message': 'No hay taxis disponibles'
+            }
+            logger.warning("No hay taxis disponibles para el servicio")
+            
+        client_socket.send(json.dumps(response).encode())
         
         client_socket.close()
-        logger.info(f"Conexión cerrada con {address}")
+        logger.info(f"Conexión cerrada")
 
     def handle_taxi_message(self, client_socket: socket.socket, data: Dict, address: str):
         """Procesar mensajes de taxi"""

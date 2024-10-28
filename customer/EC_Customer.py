@@ -1,3 +1,4 @@
+import socket
 import sys
 import os
 import json
@@ -54,35 +55,52 @@ class Customer:
     def load_services(self) -> bool:
         """Cargar servicios desde archivo JSON"""
         try:
+            logger.info("Intentando cargar servicios...")
             with open('data/EC_Requests.json', 'r') as f:
                 data = json.load(f)
                 self.pending_services = [req['Id'] for req in data['Requests']]
-            logger.info(f"Cargados {len(self.pending_services)} servicios")
+            logger.info(f"Cargados {len(self.pending_services)} servicios: {self.pending_services}")
             return True
         except Exception as e:
-            logger.error(f"Error cargando servicios: {e}")
+            logger.error(f"Error cargando servicios: {e}, {str(e)}")
             return False
 
     def request_service(self, destination: str) -> bool:
-        """Solicitar servicio de taxi"""
+        """Solicitar un servicio de taxi"""
         try:
-            request = create_message('service_request', {
+            logger.info(f"Intentando solicitar servicio a {destination}")
+            request = {
+                'type': 'service_request',
                 'customer_id': self.customer_id,
                 'destination': destination,
                 'timestamp': time.time()
-            })
+            }
             
-            success = self.kafka.publish(TOPICS['CUSTOMER_REQUESTS'], request)
-            if success:
-                self.display_message(f"Solicitud enviada - destino: {destination}")
-                return True
+            logger.debug(f"Enviando solicitud: {request}")
+            self.send_to_central(request)
             
-            self.display_message("Error enviando solicitud")
-            return False
-            
+            # Esperar respuesta con timeout
+            self.central_socket.settimeout(5.0)
+            try:
+                response = json.loads(self.central_socket.recv(1024).decode())
+                logger.debug(f"Respuesta recibida: {response}")
+                
+                if response.get('status') == 'OK':
+                    self.current_service = response.get('service_id')
+                    taxi_id = response.get('taxi_id')
+                    self.display_message(f"Servicio aceptado - Taxi {taxi_id} asignado")
+                    return True
+                else:
+                    self.display_message(f"Servicio rechazado: {response.get('message')}")
+                    return False
+            except socket.timeout:
+                logger.error("Timeout esperando respuesta de la central")
+                return False
+                
         except Exception as e:
             logger.error(f"Error solicitando servicio: {e}")
             return False
+
 
     def handle_service_update(self, message: Dict):
         """Procesar actualización de servicio"""
