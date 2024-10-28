@@ -29,9 +29,14 @@ class Customer:
         # Control
         self.running = True
         self.lock = threading.Lock()
+
+        # Inicialización
+        self.load_services()
         
-        # Conexión central
-        self.central_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+         # Conexión central - inicializada pero no conectada aún
+        self.central_socket = None
+        if not self.connect_to_central(kafka_url.split(':')[0], 50051):
+            raise Exception("No se pudo conectar a la central")
         
         # Kafka
         self.kafka = KafkaClient(kafka_url, f"customer_{customer_id}")
@@ -71,6 +76,9 @@ class Customer:
             
         except Exception as e:
             logger.error(f"Error conectando a central: {e}")
+            if self.central_socket:
+                self.central_socket.close()
+                self.central_socket = None
             return False
 
     def setup_kafka(self):
@@ -103,6 +111,10 @@ class Customer:
     def request_service(self, destination: str) -> bool:
         """Solicitar servicio"""
         try:
+            if not self.central_socket:
+                logger.error("No hay conexión con el servidor central")
+                return False
+                
             logger.info(f"Solicitando servicio a {destination}")
             request = {
                 'type': 'service_request',
@@ -110,7 +122,15 @@ class Customer:
                 'destination': destination
             }
             
-            self.central_socket.send(json.dumps(request).encode())
+            # Verificar que el socket está conectado
+            try:
+                self.central_socket.send(json.dumps(request).encode())
+            except socket.error:
+                logger.error("Error de conexión, intentando reconectar...")
+                if self.connect_to_central(self.host, self.port):
+                    self.central_socket.send(json.dumps(request).encode())
+                else:
+                    return False
             
             # Esperar respuesta con timeout
             self.central_socket.settimeout(5.0)
@@ -133,6 +153,9 @@ class Customer:
                 
         except Exception as e:
             logger.error(f"Error solicitando servicio: {e}")
+            if self.central_socket:
+                self.central_socket.close()
+                self.central_socket = None
             return False
 
     def handle_service_update(self, message: Dict):
