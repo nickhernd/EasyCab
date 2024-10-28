@@ -1,309 +1,252 @@
 import sys
 import os
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
 import socket
 import json
 import threading
 import time
 import logging
-from typing import Tuple, Optional
-from common.config import CENTRAL_HOST, CENTRAL_PORT, TAXI_STATES
+import subprocess
+from typing import Tuple, Optional, Dict
+from dataclasses import dataclass
 
-logging.basicConfig(level=logging.INFO)
+# Añadir directorio raíz al path
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from common.kafka_utils import KafkaClient, TOPICS, create_message
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
 logger = logging.getLogger(__name__)
 
 class DigitalEngine:
-    def __init__(self, taxi_id: int, sensor_port: int):
+    def __init__(self, taxi_id: int, kafka_ip: str, kafka_port: int):
         self.taxi_id = taxi_id
-        self.sensor_port = sensor_port
+        self.kafka_ip = kafka_ip
+        self.kafka_port = kafka_port
         self.position = (1, 1)  # Posición inicial
-        self.state = TAXI_STATES['AVAILABLE']
+        self.state = 'AVAILABLE'
         self.destination: Optional[Tuple[int, int]] = None
         self.current_service: Optional[str] = None
+        self.map = [[None for _ in range(20)] for _ in range(20)]
+        self.sensor_status = "OK"
         
-        # Conexión con el servidor central
-        self.central_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        
-        # Socket para sensores
-        self.sensor_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.sensor_socket.bind(('localhost', sensor_port))
-        self.sensor_socket.listen(1)
-        
-        # Control de estado
+        # Control
         self.running = True
         self.paused = False
         self.lock = threading.Lock()
-
-    def connect_to_central(self) -> bool:
+        
+        # Kafka
+        self.kafka = KafkaClient(f"{kafka_ip}:{kafka_port}", f"taxi_{taxi_id}")
+        
+        # Socket para central
+        self.central_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        
+        logger.info(f"Digital Engine del taxi {taxi_id} creado")
+        
+    def connect_to_central(self, host: str, port: int) -> bool:
         """Conectar con el servidor central"""
         try:
-            self.central_socket.connect((CENTRAL_HOST, CENTRAL_PORT))
-            print("hola con el servidor")
-            # Enviar información de autenticación
+            logger.info(f"Conectando a central {host}:{port}...")
+            self.central_socket.connect((host, port))
+            
+            # Autenticación
             auth_data = {
                 'type': 'taxi',
                 'taxi_id': self.taxi_id
             }
             self.central_socket.send(json.dumps(auth_data).encode())
             
-            # Esperar confirmación
+            # Esperar respuesta
             response = json.loads(self.central_socket.recv(1024).decode())
             if response.get('status') == 'OK':
-                logger.info(f"Taxi {self.taxi_id} conectado al servidor central")
+                logger.info("Conectado a central correctamente")
                 return True
+            
+            logger.error(f"Error en autenticación: {response}")
             return False
             
         except Exception as e:
-            logger.error(f"Error conectando al servidor central: {e}")
+            logger.error(f"Error conectando a central: {e}")
             return False
 
-    def start(self):
-        """Iniciar el Digital Engine"""
-        if not self.connect_to_central():
-            logger.error("No se pudo conectar al servidor central")
-            return
-
-        # Iniciar threads
-        threading.Thread(target=self.handle_central_messages).start()
-        threading.Thread(target=self.handle_sensor_connection).start()
-        threading.Thread(target=self.movement_controller).start()
-
-        logger.info(f"Digital Engine del taxi {self.taxi_id} iniciado")
-
-    def handle_central_messages(self):
-        """Manejar mensajes del servidor central"""
+    def start_sensors(self) -> Optional[subprocess.Popen]:
+        """Iniciar los sensores del taxi"""
         try:
-            while self.running:
-                data = self.central_socket.recv(1024).decode()
-                if not data:
-                    break
-                
-                message = json.loads(data)
-                self.process_central_message(message)
-                
+            sensor_process = subprocess.Popen([
+                'python',
+                os.path.join('taxi', 'EC_S.py'),
+                str(self.taxi_id),
+                self.kafka_ip,
+                str(self.kafka_port)
+            ])
+            logger.info(f"Sensores iniciados (PID: {sensor_process.pid})")
+            return sensor_process
         except Exception as e:
-            logger.error(f"Error en comunicación con central: {e}")
-        finally:
-            self.running = False
-
-    def handle_sensor_connection(self):
-        """Manejar conexión con los sensores"""
-        try:
-            while self.running:
-                sensor_client, addr = self.sensor_socket.accept()
-                logger.info(f"Sensor conectado desde {addr}")
-                
-                threading.Thread(target=self.handle_sensor_messages, 
-                               args=(sensor_client,)).start()
-                
-        except Exception as e:
-            logger.error(f"Error en conexión de sensor: {e}")
-        finally:
-            self.sensor_socket.close()
-
-    def handle_sensor_messages(self, sensor_client: socket.socket):
-        """Procesar mensajes de los sensores"""
-        try:
-            while self.running:
-                data = sensor_client.recv(1024).decode()
-                if not data:
-                    break
-                
-                message = json.loads(data)
-                self.process_sensor_message(message)
-                
-        except Exception as e:
-            logger.error(f"Error procesando mensaje de sensor: {e}")
-        finally:
-            sensor_client.close()
-
-    def process_central_message(self, message: dict):
-        """Procesar mensajes recibidos del servidor central"""
-        msg_type = message.get('type')
-        
-        if msg_type == 'new_service':
-            with self.lock:
-                self.current_service = message['service_id']
-                self.state = TAXI_STATES['BUSY']
-                # Obtener coordenadas del cliente primero
-                client_coords = message.get('pickup_location')
-                if client_coords:
-                    self.destination = tuple(client_coords)
-                    logger.info(f"Dirigiéndome a recoger al cliente en {self.destination}")
-                else:
-                    # Si no hay coordenadas de recogida, ir directamente al destino
-                    dest_coords = self.get_location_coordinates(message['destination'])
-                    if dest_coords:
-                        self.destination = dest_coords
-                        logger.info(f"Nuevo destino establecido: {self.destination}")
-                    else:
-                        logger.error(f"No se pudieron obtener coordenadas para {message['destination']}")
-                        self.current_service = None
-                        return
-                
-        elif msg_type == 'pickup_complete':
-            # El cliente está en el taxi, ahora ir al destino final
-            with self.lock:
-                dest_coords = self.get_location_coordinates(message['destination'])
-                if dest_coords:
-                    self.destination = dest_coords
-                    logger.info(f"Cliente recogido, dirigiéndome a {self.destination}")
-                
-        elif msg_type == 'stop':
-            with self.lock:
-                self.paused = True
-                self.state = TAXI_STATES['STOPPED']
-                logger.info("Taxi detenido por orden central")
-                
-        elif msg_type == 'resume':
-            with self.lock:
-                self.paused = False
-                self.state = TAXI_STATES['BUSY'] if self.current_service else TAXI_STATES['AVAILABLE']
-                logger.info("Taxi reanudado por orden central")
-        
-        elif msg_type == 'return_to_base':
-            with self.lock:
-                self.destination = self.get_location_coordinates('BASE')
-                self.current_service = None
-                self.state = TAXI_STATES['AVAILABLE']
-                logger.info("Retornando a la base")
-
-    def process_sensor_message(self, message: dict):
-        """Procesar mensajes de los sensores"""
-        if message.get('status') == 'KO':
-            with self.lock:
-                self.paused = True
-                self.state = TAXI_STATES['STOPPED']
-                logger.warning(f"Taxi detenido por sensor: {message.get('reason')}")
-                
-                # Notificar a central
-                self.send_to_central({
-                    'type': 'sensor_alert',
-                    'reason': message.get('reason')
-                })
-        elif message.get('status') == 'OK' and self.paused:
-            with self.lock:
-                self.paused = False
-                self.state = TAXI_STATES['BUSY'] if self.current_service else TAXI_STATES['AVAILABLE']
-                logger.info("Sensores OK, reanudando movimiento")
+            logger.error(f"Error iniciando sensores: {e}")
+            return None
 
     def movement_controller(self):
-        """Controlar el movimiento del taxi"""
+        """Gestionar movimiento del taxi"""
         while self.running:
-            if not self.paused and self.destination:
+            if not self.paused and self.destination and self.sensor_status == "OK":
                 with self.lock:
-                    new_position = self.calculate_next_position()
-                    if new_position:
-                        self.position = new_position
-                        self.send_position_update()
+                    next_pos = self.calculate_next_position()
+                    if next_pos:
+                        self.position = next_pos
+                        self.publish_position()
                         
-                        # Verificar si llegamos al destino
                         if self.position == self.destination:
                             self.handle_arrival()
-                
-            time.sleep(1)  # Actualizar cada segundo
+            time.sleep(1)
 
     def calculate_next_position(self) -> Optional[Tuple[int, int]]:
-        """Calcular siguiente posición hacia el destino considerando el mapa esférico"""
+        """Calcular siguiente posición hacia el destino"""
         if not self.destination:
             return None
             
         x, y = self.position
         dest_x, dest_y = self.destination
         
-        # Calcular la diferencia teniendo en cuenta el mapa esférico
+        # Calcular diferencias (mapa esférico)
         dx = dest_x - x
         dy = dest_y - y
         
-        # Ajustar para el mapa esférico (20x20)
-        if abs(dx) > 10:  # Si la distancia es mayor que la mitad del mapa
+        if abs(dx) > 10:  # Más de la mitad del mapa
             dx = -1 * (20 - abs(dx)) if dx > 0 else (20 - abs(dx))
         if abs(dy) > 10:
             dy = -1 * (20 - abs(dy)) if dy > 0 else (20 - abs(dy))
         
-        # Determinar el siguiente movimiento
+        # Calcular nuevo movimiento
         new_x = x
         new_y = y
         
-        # Movimiento diagonal si es posible
-        if dx != 0 and dy != 0:
+        if dx != 0:
             new_x = (x + (1 if dx > 0 else -1)) % 20
+        if dy != 0:
             new_y = (y + (1 if dy > 0 else -1)) % 20
-        # Si no, movimiento horizontal o vertical
-        elif dx != 0:
-            new_x = (x + (1 if dx > 0 else -1)) % 20
-        elif dy != 0:
-            new_y = (y + (1 if dy > 0 else -1)) % 20
-            
+        
         return (new_x, new_y)
 
     def handle_arrival(self):
-        """Manejar la llegada al destino"""
-        if self.current_service:
-            if self.destination == self.get_location_coordinates('BASE'):
-                logger.info("Llegada a la base")
-                self.current_service = None
-                self.state = TAXI_STATES['AVAILABLE']
-            else:
-                # Notificar servicio completado
-                self.send_to_central({
-                    'type': 'service_completed',
+        """Procesar llegada a destino"""
+        with self.lock:
+            if self.current_service:
+                message = create_message('service_completed', {
                     'service_id': self.current_service,
-                    'location': self.position
+                    'taxi_id': self.taxi_id,
+                    'destination': self.position
                 })
-                
-                # Volver a la base después de completar el servicio
-                self.destination = self.get_location_coordinates('BASE')
-                self.current_service = None
-                self.state = TAXI_STATES['AVAILABLE']
-                logger.info("Servicio completado, retornando a base")
-        else:
-            logger.info(f"Llegada al destino {self.position}")
+                self.kafka.publish(TOPICS['SERVICE_UPDATES'], message)
+                logger.info(f"Servicio {self.current_service} completado")
+            
+            self.current_service = None
             self.destination = None
+            self.state = 'AVAILABLE'
+            self.publish_status()
 
-    def send_position_update(self):
-        """Enviar actualización de posición a central"""
-        self.send_to_central({
-            'type': 'position_update',
-            'position': self.position
+    def publish_position(self):
+        """Publicar posición actual"""
+        message = create_message('position_update', {
+            'taxi_id': self.taxi_id,
+            'position': self.position,
+            'state': self.state,
+            'service_id': self.current_service
         })
+        self.kafka.publish(TOPICS['TAXI_POSITIONS'], message)
 
-    def send_to_central(self, message: dict):
-        """Enviar mensaje al servidor central"""
+    def publish_status(self):
+        """Publicar estado actual"""
+        message = create_message('status_update', {
+            'taxi_id': self.taxi_id,
+            'state': self.state,
+            'position': self.position,
+            'sensor_status': self.sensor_status,
+            'current_service': self.current_service
+        })
+        self.kafka.publish(TOPICS['TAXI_STATUS'], message)
+
+    def display_status(self):
+        """Mostrar estado en pantalla"""
+        os.system('cls' if os.name == 'nt' else 'clear')
+        print(f"\n=== Taxi {self.taxi_id} ===")
+        print(f"Estado: {self.state}")
+        print(f"Posición: {self.position}")
+        print(f"Destino: {self.destination}")
+        print(f"Servicio actual: {self.current_service}")
+        print(f"Estado sensores: {self.sensor_status}")
+        if self.map:
+            print("\nMapa actual:")
+            for row in self.map:
+                print(" ".join(str(cell or '.') for cell in row))
+        print("=" * 40)
+
+    def display_controller(self):
+        """Controlador de display"""
+        while self.running:
+            self.display_status()
+            time.sleep(1)
+
+    def run(self):
+        """Iniciar Digital Engine"""
+        logger.info("Iniciando Digital Engine...")
+        
+        # Iniciar sensores
+        self.sensor_process = self.start_sensors()
+        if not self.sensor_process:
+            return
+        
+        # Iniciar threads
+        threads = [
+            threading.Thread(target=self.movement_controller),
+            threading.Thread(target=self.display_controller)
+        ]
+        
+        for thread in threads:
+            thread.daemon = True
+            thread.start()
+        
         try:
-            self.central_socket.send(json.dumps(message).encode())
-        except Exception as e:
-            logger.error(f"Error enviando mensaje a central: {e}")
+            while self.running:
+                time.sleep(1)
+                self.publish_status()
+        except KeyboardInterrupt:
+            logger.info("Deteniendo Digital Engine...")
+        finally:
+            self.cleanup()
 
-    def get_location_coordinates(self, location_id: str) -> Optional[Tuple[int, int]]:
-        """Convertir ID de localización a coordenadas basado en un mapeo conocido"""
-        location_map = {
-            'A': (5, 5),
-            'B': (10, 10),
-            'C': (15, 15),
-            'BASE': (1, 1)
-        }
-        return location_map.get(location_id)
-
-    def stop(self):
-        """Detener el Digital Engine"""
+    def cleanup(self):
+        """Limpieza al cerrar"""
         self.running = False
+        
+        # Detener sensores
+        if hasattr(self, 'sensor_process') and self.sensor_process:
+            logger.info("Deteniendo sensores...")
+            self.sensor_process.terminate()
+            self.sensor_process.wait()
+        
+        # Cerrar conexiones
+        self.kafka.close()
         self.central_socket.close()
-        self.sensor_socket.close()
+        logger.info("Digital Engine detenido")
 
 if __name__ == "__main__":
     import argparse
-    parser = argparse.ArgumentParser()
-    parser.add_argument("taxi_id", type=int, help="ID del taxi")
-    parser.add_argument("sensor_port", type=int, help="Puerto para conexión con sensores")
+    
+    parser = argparse.ArgumentParser(description='EC_DE: Digital Engine')
+    parser.add_argument('central_ip', help='IP del servidor central')
+    parser.add_argument('central_port', type=int, help='Puerto del servidor central')
+    parser.add_argument('kafka_ip', help='IP del broker Kafka')
+    parser.add_argument('kafka_port', type=int, help='Puerto del broker Kafka')
+    parser.add_argument('taxi_id', type=int, help='ID del taxi')
+    
     args = parser.parse_args()
-
-    taxi = DigitalEngine(args.taxi_id, args.sensor_port)
-    try:
-        taxi.start()
-        while True:
-            time.sleep(1)
-    except KeyboardInterrupt:
-        logger.info("Deteniendo Digital Engine...")
-        taxi.stop()
+    
+    taxi = DigitalEngine(
+        taxi_id=args.taxi_id,
+        kafka_ip=args.kafka_ip,
+        kafka_port=args.kafka_port
+    )
+    
+    if taxi.connect_to_central(args.central_ip, args.central_port):
+        taxi.run()
