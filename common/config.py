@@ -1,7 +1,7 @@
 import os
 
 # Kafka Configuration
-KAFKA_HOST = os.getenv('KAFKA_HOST', 'localhost')
+KAFKA_HOST = os.getenv('KAFKA_HOST', '192.168.56.123')
 KAFKA_PORT = os.getenv('KAFKA_PORT', '9092')
 KAFKA_BOOTSTRAP_SERVERS = f'{KAFKA_HOST}:{KAFKA_PORT}'
 
@@ -18,7 +18,7 @@ TOPICS = {
 MAP_SIZE = 20
 
 # Central Server Configuration
-CENTRAL_HOST = os.getenv('CENTRAL_HOST', 'localhost')
+CENTRAL_HOST = os.getenv('CENTRAL_HOST', '192.168.56.123')
 CENTRAL_PORT = int(os.getenv('CENTRAL_PORT', '50051'))
 
 # Colors for terminal output

@@ -38,7 +38,6 @@ class DigitalEngine:
     def connect_to_central(self) -> bool:
         """Conectar con el servidor central"""
         try:
-            print("hola con el servidor")
             self.central_socket.connect((CENTRAL_HOST, CENTRAL_PORT))
             print("hola con el servidor")
             # Enviar información de autenticación
