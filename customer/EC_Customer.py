@@ -11,7 +11,10 @@ from typing import List, Dict, Optional
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from common.kafka_utils import KafkaClient, TOPICS, create_message
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
 logger = logging.getLogger(__name__)
 
 class Customer:
@@ -21,31 +24,63 @@ class Customer:
         self.current_service: Optional[str] = None
         self.assigned_taxi: Optional[int] = None
         self.service_status = None
+        self.taxi_position = None
         
         # Control
         self.running = True
         self.lock = threading.Lock()
         
+        # Conexión central
+        self.central_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        
         # Kafka
         self.kafka = KafkaClient(kafka_url, f"customer_{customer_id}")
-        self.setup_kafka()
         
         # UI
         self.display_lock = threading.Lock()
         
-        # Cargar servicios
+        # Inicialización
+        if not self.connect_to_central(kafka_url.split(':')[0], 50051):
+            raise Exception("No se pudo conectar a la central")
+            
+        self.setup_kafka()
         self.load_services()
+        logger.info(f"Cliente {customer_id} iniciado")
+
+    def connect_to_central(self, host: str, port: int) -> bool:
+        """Conectar con el servidor central"""
+        try:
+            logger.info(f"Conectando a central {host}:{port}")
+            self.central_socket.connect((host, port))
+            
+            # Enviar autenticación
+            auth_data = {
+                'type': 'customer',
+                'customer_id': self.customer_id
+            }
+            self.central_socket.send(json.dumps(auth_data).encode())
+            
+            # Esperar respuesta
+            response = json.loads(self.central_socket.recv(1024).decode())
+            if response.get('status') == 'OK':
+                logger.info("Conectado a central")
+                return True
+                
+            logger.error(f"Error en autenticación: {response}")
+            return False
+            
+        except Exception as e:
+            logger.error(f"Error conectando a central: {e}")
+            return False
 
     def setup_kafka(self):
-        """Configurar conexiones Kafka"""
-        # Suscribirse a actualizaciones de servicio
+        """Configurar suscripciones Kafka"""
         self.kafka.subscribe(
             TOPICS['SERVICE_UPDATES'],
             self.handle_service_update,
             f"customer_{self.customer_id}_service"
         )
         
-        # Suscribirse a posiciones de taxis
         self.kafka.subscribe(
             TOPICS['TAXI_POSITIONS'],
             self.handle_taxi_position,
@@ -53,31 +88,29 @@ class Customer:
         )
 
     def load_services(self) -> bool:
-        """Cargar servicios desde archivo JSON"""
+        """Cargar servicios desde archivo"""
         try:
-            logger.info("Intentando cargar servicios...")
+            logger.info("Cargando servicios...")
             with open('data/EC_Requests.json', 'r') as f:
                 data = json.load(f)
                 self.pending_services = [req['Id'] for req in data['Requests']]
             logger.info(f"Cargados {len(self.pending_services)} servicios: {self.pending_services}")
             return True
         except Exception as e:
-            logger.error(f"Error cargando servicios: {e}, {str(e)}")
+            logger.error(f"Error cargando servicios: {e}")
             return False
 
     def request_service(self, destination: str) -> bool:
-        """Solicitar un servicio de taxi"""
+        """Solicitar servicio"""
         try:
-            logger.info(f"Intentando solicitar servicio a {destination}")
+            logger.info(f"Solicitando servicio a {destination}")
             request = {
                 'type': 'service_request',
                 'customer_id': self.customer_id,
-                'destination': destination,
-                'timestamp': time.time()
+                'destination': destination
             }
             
-            logger.debug(f"Enviando solicitud: {request}")
-            self.send_to_central(request)
+            self.central_socket.send(json.dumps(request).encode())
             
             # Esperar respuesta con timeout
             self.central_socket.settimeout(5.0)
@@ -87,20 +120,20 @@ class Customer:
                 
                 if response.get('status') == 'OK':
                     self.current_service = response.get('service_id')
-                    taxi_id = response.get('taxi_id')
-                    self.display_message(f"Servicio aceptado - Taxi {taxi_id} asignado")
+                    self.assigned_taxi = response.get('taxi_id')
+                    self.service_status = 'ACCEPTED'
+                    self.display_message(f"Servicio aceptado - Taxi {self.assigned_taxi}")
                     return True
                 else:
                     self.display_message(f"Servicio rechazado: {response.get('message')}")
                     return False
             except socket.timeout:
-                logger.error("Timeout esperando respuesta de la central")
+                logger.error("Timeout esperando respuesta")
                 return False
                 
         except Exception as e:
             logger.error(f"Error solicitando servicio: {e}")
             return False
-
 
     def handle_service_update(self, message: Dict):
         """Procesar actualización de servicio"""
@@ -109,42 +142,45 @@ class Customer:
             update_type = payload.get('update_type')
             service_id = payload.get('service_id')
             
-            if update_type == 'service_accepted':
-                self.handle_service_accepted(payload)
-            elif update_type == 'service_completed':
+            if update_type == 'service_completed':
                 self.handle_service_completed(service_id)
             elif update_type == 'service_cancelled':
                 self.handle_service_cancelled(service_id)
             elif update_type == 'taxi_status':
                 self.handle_taxi_status_update(payload)
 
-    def handle_service_accepted(self, data: Dict):
-        """Procesar aceptación de servicio"""
-        with self.lock:
-            self.current_service = data['service_id']
-            self.assigned_taxi = data['taxi_id']
-            self.service_status = 'ACCEPTED'
-            self.display_message(f"Servicio aceptado - Taxi {self.assigned_taxi}")
-
     def handle_service_completed(self, service_id: str):
-        """Procesar finalización de servicio"""
+        """Procesar servicio completado"""
         if service_id == self.current_service:
             self.display_message(f"Servicio {service_id} completado")
-            self.current_service = None
-            self.assigned_taxi = None
-            self.service_status = None
+            
+            with self.lock:
+                self.current_service = None
+                self.assigned_taxi = None
+                self.service_status = None
+                self.taxi_position = None
             
             # Programar siguiente servicio
             threading.Timer(4.0, self.request_next_service).start()
 
+    def handle_service_cancelled(self, service_id: str):
+        """Procesar cancelación de servicio"""
+        if service_id == self.current_service:
+            self.display_message(f"Servicio {service_id} cancelado")
+            self.request_next_service()
+
+    def handle_taxi_status_update(self, data: Dict):
+        """Procesar actualización de estado del taxi"""
+        if data.get('taxi_id') == self.assigned_taxi:
+            self.service_status = data.get('status')
+
     def handle_taxi_position(self, message: Dict):
-        """Procesar actualización de posición del taxi asignado"""
+        """Procesar posición del taxi"""
         payload = message.get('payload', {})
         taxi_id = payload.get('taxi_id')
         
         if taxi_id == self.assigned_taxi:
-            position = payload.get('position')
-            self.update_taxi_position(position)
+            self.taxi_position = payload.get('position')
 
     def request_next_service(self):
         """Solicitar siguiente servicio"""
@@ -175,8 +211,8 @@ class Customer:
             print(f"Estado: {self.service_status}")
             print(f"Taxi asignado: {self.assigned_taxi}")
             print(f"Servicios pendientes: {len(self.pending_services)}")
-            if self.assigned_taxi:
-                print(f"Posición del taxi: {getattr(self, 'taxi_position', 'Desconocida')}")
+            if self.taxi_position:
+                print(f"Posición del taxi: {self.taxi_position}")
             print("=" * 40)
 
     def run(self):
@@ -193,6 +229,8 @@ class Customer:
             while self.running:
                 time.sleep(1)
         except KeyboardInterrupt:
+            logger.info("Deteniendo cliente...")
+        finally:
             self.cleanup()
 
     def display_loop(self):
@@ -204,7 +242,10 @@ class Customer:
     def cleanup(self):
         """Limpieza al cerrar"""
         self.running = False
-        self.kafka.close()
+        if hasattr(self, 'central_socket'):
+            self.central_socket.close()
+        if hasattr(self, 'kafka'):
+            self.kafka.close()
 
 if __name__ == "__main__":
     import argparse
