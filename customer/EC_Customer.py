@@ -177,6 +177,11 @@ class Customer:
             finally:
                 self.central_socket = None
 
+    def setup_kafka(self):
+        self.kafka = KafkaClient(self.kafka_url, f"customer_{self.customer_id}")
+        logger.info("Kafka setup completed")
+
+
 
 if __name__ == "__main__":
     import argparse
