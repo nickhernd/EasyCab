@@ -45,24 +45,64 @@ class Taxi:
     current_service: Optional[str] = None
     client_socket: Optional[socket.socket] = None
 
+class MapManager:
+    def __init__(self, size: int = 20):
+        self.size = size
+        self.grid = [[None for _ in range(size)] for _ in range(size)]
+        self.locations: Dict[str, Location] = {}
+        self.taxis: Dict[int, Tuple[int, int]] = {}  # taxi_id -> (x, y)
+
+    def add_location(self, loc_id: str, x: int, y: int) -> bool:
+        """Añadir localización al mapa"""
+        if not (0 <= x < self.size and 0 <= y < self.size):
+            return False
+        
+        location = Location(loc_id, x, y)
+        self.locations[loc_id] = location
+        self.grid[y][x] = ('location', loc_id)
+        return True
+
+    def add_taxi(self, taxi_id: int, x: int, y: int, state: str) -> bool:
+        """Añadir o actualizar taxi en el mapa"""
+        if not (0 <= x < self.size and 0 <= y < self.size):
+            return False
+            
+        # Limpiar posición anterior si existe
+        if taxi_id in self.taxis:
+            old_x, old_y = self.taxis[taxi_id]
+            self.grid[old_y][old_x] = None
+            
+        self.taxis[taxi_id] = (x, y)
+        self.grid[y][x] = ('taxi', taxi_id, state)
+        return True
+
+    def remove_taxi(self, taxi_id: int) -> None:
+        """Eliminar taxi del mapa"""
+        if taxi_id in self.taxis:
+            x, y = self.taxis[taxi_id]
+            self.grid[y][x] = None
+            del self.taxis[taxi_id]
+
+    def get_state(self) -> List[List]:
+        """Obtener estado actual del mapa"""
+        return [row[:] for row in self.grid]
+
 class CentralServer:
     def __init__(self, host='0.0.0.0', port=50051):
         self.host = host
         self.port = port
         self.running = True
         
-        # Estructuras de datos
-        self.locations: Dict[str, Location] = {}
-        self.taxis: Dict[int, Taxi] = {}
-        self.services: Dict[str, Dict] = {}
-        self.map = [[None for _ in range(20)] for _ in range(20)]
+        # Inicializar estructuras
+        self.map_manager = MapManager()  # Inicialización del MapManager
+        self.taxis: Dict[int, dict] = {}
+        self.services: Dict[str, dict] = {}
         
         # Locks para sincronización
-        self.map_lock = threading.Lock()
         self.taxi_lock = threading.Lock()
         self.service_lock = threading.Lock()
         
-        # Inicializar servidor
+        # Socket servidor
         self.server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.server_socket.bind((self.host, self.port))
