@@ -213,19 +213,12 @@ class Customer:
 
     def run(self):
         """Start the customer client."""
-        host = '192.168.56.123' 
-        port = 50051         
-
-        if not self.connect_to_central(host, port):
-            logger.error("Failed to connect to central server. Exiting.")
-            return  
-
         display_thread = threading.Thread(target=self.display_loop)
         display_thread.daemon = True
         display_thread.start()
-
+        
         self.request_next_service()
-
+        
         try:
             while self.running:
                 time.sleep(1)
