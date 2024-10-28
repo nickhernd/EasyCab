@@ -25,7 +25,7 @@ class Customer:
         self.assigned_taxi: Optional[int] = None
         self.service_status = None
         self.taxi_position = "Unknown"
-        self.central_socket = None
+        self.central_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         
         self.running = True
         self.lock = threading.Lock()
