@@ -1,19 +1,25 @@
 {
     "nodes": {
         "kafka": {
-            "ip": "IP_WINDOWS",
+            "ip": "192.168.56.123",
+            "hostname": "windows",
             "ports": [2181, 9092],
             "services": ["zookeeper", "kafka", "customer"]
         },
         "central": {
-            "ip": "IP_LINUX_1",
+            "ip": "192.168.56.114",
+            "hostname": "fedora",
             "ports": [50051],
             "services": ["central"]
         },
         "taxi": {
-            "ip": "IP_LINUX_2",
+            "ip": "10.0.2.19",
+            "hostname": "ghostbsd",
             "ports": [50052],
             "services": ["taxi", "sensors"]
         }
+    },
+    "network": {
+        "subnet": "192.168.56.0/24"
     }
 }
