@@ -10,10 +10,6 @@ class TaxiDeployer(BaseDeployer):
         if not self.check_ports(required_ports):
             return False
             
-        # Verificar que estamos en BSD
-        if 'BSD' not in platform.system():
-            print("Error: Este script debe ejecutarse en BSD")
-            return False
             
         return True
 
