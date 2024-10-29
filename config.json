@@ -13,8 +13,8 @@
             "services": ["central"]
         },
         "taxi": {
-            "ip": "10.0.2.19",
-            "hostname": "ghostbsd",
+            "ip": "192.168.56.125",
+            "hostname": "linuxmint",
             "ports": [50052],
             "services": ["taxi", "sensors"]
         }

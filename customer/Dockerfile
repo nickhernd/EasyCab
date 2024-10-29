@@ -1,5 +1,4 @@
 FROM python:3.9-slim
-
 WORKDIR /app
 
 # Instalar dependencias
@@ -11,8 +10,17 @@ COPY common ./common
 COPY customer ./customer
 COPY data ./data
 
-# Variable de entorno para debug
+# Variables de entorno
 ENV PYTHONUNBUFFERED=1
+ENV CUSTOMER_PORT=50052
+
+# Exponer puerto
+EXPOSE ${CUSTOMER_PORT}
 
 # Comando de inicio
-CMD ["python", "-u", "customer/EC_Customer.py", "cliente1", "data/EC_Requests.json"]
+CMD ["python", "-u", "customer/EC_Customer.py", \
+     "--central-host", "${CENTRAL_HOST}", \
+     "--central-port", "50051", \
+     "--kafka-host", "${KAFKA_HOST}", \
+     "--kafka-port", "9092", \
+     "--customer-id", "${CUSTOMER_ID:-1}"]

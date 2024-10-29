@@ -1,14 +1,35 @@
 version: '3'
 services:
-  taxi:
+  taxi_de:
     build:
       context: ./taxi
       dockerfile: Dockerfile
+      args:
+        - SERVICE=DE
     environment:
-      - KAFKA_HOST=${PC1_IP}
+      - KAFKA_HOST=${KAFKA_HOST:-192.168.56.123}
       - KAFKA_PORT=9092
-      - CENTRAL_HOST=${PC2_IP}
+      - CENTRAL_HOST=${CENTRAL_HOST:-192.168.56.114}
       - CENTRAL_PORT=50051
+      - TAXI_ID=${TAXI_ID:-1}
+      - SENSOR_PORT=50053
+    ports:
+      - "50053:50053"
+    networks:
+      - easycab_network
+
+  taxi_sensor:
+    build:
+      context: ./taxi
+      dockerfile: Dockerfile
+      args:
+        - SERVICE=SENSOR
+    environment:
+      - TAXI_ID=${TAXI_ID:-1}
+      - DE_HOST=taxi_de
+      - DE_PORT=50053
+    depends_on:
+      - taxi_de
     networks:
       - easycab_network
 
