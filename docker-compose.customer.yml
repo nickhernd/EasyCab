@@ -1,0 +1,21 @@
+version: '3'
+services:
+  customer:
+    build:
+      context: .
+      dockerfile: customer/Dockerfile
+    environment:
+      KAFKA_IP: ${KAFKA_IP}  # IP de Kafka desde el archivo .env
+      CUSTOMER_ID: "customer1"
+      CENTRAL_IP: ${CENTRAL_IP}  # Si quieres parametrizar la IP de Central
+    depends_on:
+      - central
+    networks:
+      - easycab_network
+
+networks:
+  easycab_network:
+    driver: bridge
+
+env_file:
+  - ./config.env

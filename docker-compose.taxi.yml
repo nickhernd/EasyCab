@@ -2,19 +2,14 @@ version: '3'
 services:
   taxi_de:
     build:
-      context: ./taxi
-      dockerfile: Dockerfile
-      args:
-        - SERVICE=DE
+      context: .
+      dockerfile: taxi/Dockerfile
     environment:
-      - KAFKA_HOST=${KAFKA_HOST:-192.168.56.123}
-      - KAFKA_PORT=9092
-      - CENTRAL_HOST=${CENTRAL_HOST:-192.168.56.114}
-      - CENTRAL_PORT=50051
-      - TAXI_ID=${TAXI_ID:-1}
-      - SENSOR_PORT=50053
-    ports:
-      - "50053:50053"
+      KAFKA_IP: ${KAFKA_IP}  # IP de Kafka desde el archivo .env
+      CENTRAL_IP: ${CENTRAL_IP}
+      TAXI_ID: "1"
+    depends_on:
+      - central
     networks:
       - easycab_network
 
@@ -22,12 +17,10 @@ services:
     build:
       context: ./taxi
       dockerfile: Dockerfile
-      args:
-        - SERVICE=SENSOR
     environment:
-      - TAXI_ID=${TAXI_ID:-1}
-      - DE_HOST=taxi_de
-      - DE_PORT=50053
+      TAXI_ID: "1"
+      DE_HOST: taxi_de
+      DE_PORT: 50053
     depends_on:
       - taxi_de
     networks:
@@ -36,3 +29,6 @@ services:
 networks:
   easycab_network:
     driver: bridge
+
+env_file:
+  - ./config.env

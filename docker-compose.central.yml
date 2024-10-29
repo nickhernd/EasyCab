@@ -18,12 +18,12 @@ services:
       context: .
       dockerfile: central/Dockerfile
     environment:
-      - KAFKA_HOST=${KAFKA_HOST}
-      - CENTRAL_PORT=50051
-      - DB_HOST=mysql
-      - DB_PORT=3306
-      - DB_USER=easycab
-      - DB_PASSWORD=easycab123
+      KAFKA_HOST: ${KAFKA_IP}  # IP de Kafka desde el archivo .env
+      CENTRAL_PORT: 50051
+      DB_HOST: mysql
+      DB_PORT: 3306
+      DB_USER: easycab
+      DB_PASSWORD: easycab123
     ports:
       - "50051:50051"
     depends_on:
@@ -37,3 +37,6 @@ networks:
 
 volumes:
   mysql_data:
+
+env_file:
+  - ./config.env

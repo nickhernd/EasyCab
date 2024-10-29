@@ -6,7 +6,7 @@ import threading
 import time
 import logging
 import subprocess
-from typing import Tuple, Optional, Dict
+from typing import Tuple, Optional
 from dataclasses import dataclass
 
 # Añadir directorio raíz al path
@@ -20,17 +20,17 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 class DigitalEngine:
-    def __init__(self, taxi_id: int, kafka_ip: str, kafka_port: int):
+    def __init__(self, taxi_id: int, kafka_ip: str, kafka_port: int, sensor_ip: str, sensor_port: int):
         self.taxi_id = taxi_id
         self.kafka_ip = kafka_ip
         self.kafka_port = kafka_port
-        self.position = (1, 1)  # Posición inicial
+        self.position = (1, 1)
         self.state = 'AVAILABLE'
         self.destination: Optional[Tuple[int, int]] = None
         self.current_service: Optional[str] = None
         self.map = [[None for _ in range(20)] for _ in range(20)]
         self.sensor_status = "OK"
-        
+
         # Control
         self.running = True
         self.paused = False
@@ -116,23 +116,11 @@ class DigitalEngine:
         x, y = self.position
         dest_x, dest_y = self.destination
         
-        # Calcular diferencias (mapa esférico)
         dx = dest_x - x
         dy = dest_y - y
-        
-        if abs(dx) > 10:  # Más de la mitad del mapa
-            dx = -1 * (20 - abs(dx)) if dx > 0 else (20 - abs(dx))
-        if abs(dy) > 10:
-            dy = -1 * (20 - abs(dy)) if dy > 0 else (20 - abs(dy))
-        
-        # Calcular nuevo movimiento
-        new_x = x
-        new_y = y
-        
-        if dx != 0:
-            new_x = (x + (1 if dx > 0 else -1)) % 20
-        if dy != 0:
-            new_y = (y + (1 if dy > 0 else -1)) % 20
+
+        new_x = x + (1 if dx > 0 else -1) if dx != 0 else x
+        new_y = y + (1 if dy > 0 else -1) if dy != 0 else y
         
         return (new_x, new_y)
 
@@ -174,40 +162,16 @@ class DigitalEngine:
         })
         self.kafka.publish(TOPICS['TAXI_STATUS'], message)
 
-    def display_status(self):
-        """Mostrar estado en pantalla"""
-        os.system('cls' if os.name == 'nt' else 'clear')
-        print(f"\n=== Taxi {self.taxi_id} ===")
-        print(f"Estado: {self.state}")
-        print(f"Posición: {self.position}")
-        print(f"Destino: {self.destination}")
-        print(f"Servicio actual: {self.current_service}")
-        print(f"Estado sensores: {self.sensor_status}")
-        if self.map:
-            print("\nMapa actual:")
-            for row in self.map:
-                print(" ".join(str(cell or '.') for cell in row))
-        print("=" * 40)
-
-    def display_controller(self):
-        """Controlador de display"""
-        while self.running:
-            self.display_status()
-            time.sleep(1)
-
     def run(self):
         """Iniciar Digital Engine"""
         logger.info("Iniciando Digital Engine...")
         
-        # Iniciar sensores
         self.sensor_process = self.start_sensors()
         if not self.sensor_process:
             return
         
-        # Iniciar threads
         threads = [
-            threading.Thread(target=self.movement_controller),
-            threading.Thread(target=self.display_controller)
+            threading.Thread(target=self.movement_controller)
         ]
         
         for thread in threads:
@@ -227,34 +191,31 @@ class DigitalEngine:
         """Limpieza al cerrar"""
         self.running = False
         
-        # Detener sensores
         if hasattr(self, 'sensor_process') and self.sensor_process:
             logger.info("Deteniendo sensores...")
             self.sensor_process.terminate()
             self.sensor_process.wait()
         
-        # Cerrar conexiones
         self.kafka.close()
         self.central_socket.close()
         logger.info("Digital Engine detenido")
 
 if __name__ == "__main__":
-    import argparse
-    
-    parser = argparse.ArgumentParser(description='EC_DE: Digital Engine')
-    parser.add_argument('central_ip', help='IP del servidor central')
-    parser.add_argument('central_port', type=int, help='Puerto del servidor central')
-    parser.add_argument('kafka_ip', help='IP del broker Kafka')
-    parser.add_argument('kafka_port', type=int, help='Puerto del broker Kafka')
-    parser.add_argument('taxi_id', type=int, help='ID del taxi')
-    
-    args = parser.parse_args()
-    
+    if len(sys.argv) != 5:
+        print("Uso: python EC_DE.py <central_ip> <central_port> <kafka_ip> <kafka_port> <taxi_id>")
+        sys.exit(1)
+
+    central_ip = sys.argv[1]
+    central_port = int(sys.argv[2])
+    kafka_ip = sys.argv[3]
+    kafka_port = int(sys.argv[4])
+    taxi_id = int(sys.argv[5])
+
     taxi = DigitalEngine(
-        taxi_id=args.taxi_id,
-        kafka_ip=args.kafka_ip,
-        kafka_port=args.kafka_port
+        taxi_id=taxi_id,
+        kafka_ip=kafka_ip,
+        kafka_port=kafka_port
     )
     
-    if taxi.connect_to_central(args.central_ip, args.central_port):
+    if taxi.connect_to_central(central_ip, central_port):
         taxi.run()

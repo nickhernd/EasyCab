@@ -1,4 +1,3 @@
-version: '3'
 services:
   zookeeper:
     image: wurstmeister/zookeeper
@@ -11,42 +10,19 @@ services:
     image: wurstmeister/kafka
     ports:
       - "9092:9092"
+    env_file:
+      - ./config.env 
     environment:
-      KAFKA_ADVERTISED_HOST_NAME: ${KAFKA_HOST:-192.168.56.123}
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://${KAFKA_IP}:${KAFKA_PORT}
       KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://${KAFKA_HOST:-192.168.56.123}:9092
       KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
-      KAFKA_CREATE_TOPICS: >-
-        taxi_positions:1:1,
-        customer_requests:1:1,
-        taxi_status:1:1,
-        taxi_sensors:1:1,
-        taxi_commands:1:1,
-        service_updates:1:1
+      KAFKA_CREATE_TOPICS: "taxi_positions:1:1,customer_requests:1:1,taxi_status:1:1"
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: 'true'
       KAFKA_DELETE_TOPIC_ENABLE: 'true'
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
       - zookeeper
-    networks:
-      - easycab_network
-
-  customer:
-    build:
-      context: ./customer
-      dockerfile: Dockerfile
-    environment:
-      - KAFKA_HOST=${KAFKA_HOST:-192.168.56.123}
-      - KAFKA_PORT=9092
-      - CUSTOMER_HOST=0.0.0.0
-      - CUSTOMER_PORT=50052
-      - CENTRAL_HOST=${CENTRAL_HOST:-192.168.56.114}
-      - CENTRAL_PORT=50051
-    ports:
-      - "50052:50052"
-    depends_on:
-      - kafka
     networks:
       - easycab_network
 

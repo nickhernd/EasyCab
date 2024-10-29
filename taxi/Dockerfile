@@ -1,26 +1,18 @@
+# Dockerfile para EC_DE (Digital Engine)
 FROM python:3.9-slim
+
+# Establecer directorio de trabajo
 WORKDIR /app
 
-# Instalar dependencias
-COPY taxi/requirements.txt ./requirements.txt
-RUN pip install -r requirements.txt
+# Copiar los archivos de la aplicación
+COPY taxi /app/taxi
+COPY common /app/common
 
-# Copiar código
-COPY common ./common
-COPY taxi ./taxi
+# Instalar las dependencias
+RUN pip install -r /app/taxi/requirements.txt
 
-# Variables de entorno
-ENV PYTHONUNBUFFERED=1
-ENV TAXI_PORT=50053
+# Exponer el puerto de EC_DE
+EXPOSE 50053
 
-# Exponer puerto
-EXPOSE ${TAXI_PORT}
-
-# Comando de inicio
-CMD ["python", "-u", "taxi/EC_DE.py", \
-     "--central-host", "${CENTRAL_HOST}", \
-     "--central-port", "50051", \
-     "--kafka-host", "${KAFKA_HOST}", \
-     "--kafka-port", "9092", \
-     "--taxi-id", "${TAXI_ID:-1}", \
-     "--taxi-port", "${TAXI_PORT}"]
+# Comando de ejecución
+CMD ["python", "/app/taxi/EC_DE.py", "${CENTRAL_IP}", "50051", "${KAFKA_IP}", "9092", "${TAXI_ID}"]

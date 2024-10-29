@@ -1,26 +1,19 @@
+# Dockerfile para EC_Customer
 FROM python:3.9-slim
+
+# Establecer directorio de trabajo
 WORKDIR /app
 
-# Instalar dependencias
-COPY customer/requirements.txt ./requirements.txt
-RUN pip install -r requirements.txt
+# Copiar los archivos de la aplicación
+COPY customer /app/customer
+COPY common /app/common
+COPY data /app/data
 
-# Copiar código y datos
-COPY common ./common
-COPY customer ./customer
-COPY data ./data
+# Instalar las dependencias
+RUN pip install -r /app/customer/requirements.txt
 
-# Variables de entorno
-ENV PYTHONUNBUFFERED=1
-ENV CUSTOMER_PORT=50052
+# Exponer el puerto de EC_Customer si es necesario
+EXPOSE 50052
 
-# Exponer puerto
-EXPOSE ${CUSTOMER_PORT}
-
-# Comando de inicio
-CMD ["python", "-u", "customer/EC_Customer.py", \
-     "--central-host", "${CENTRAL_HOST}", \
-     "--central-port", "50051", \
-     "--kafka-host", "${KAFKA_HOST}", \
-     "--kafka-port", "9092", \
-     "--customer-id", "${CUSTOMER_ID:-1}"]
+# Comando de ejecución
+CMD ["python", "/app/customer/EC_Customer.py", "${CENTRAL_IP}", "50051", "${KAFKA_IP}", "9092", "${CUSTOMER_ID}"]
