@@ -1,0 +1,19 @@
+{
+    "nodes": {
+        "kafka": {
+            "ip": "IP_WINDOWS",
+            "ports": [2181, 9092],
+            "services": ["zookeeper", "kafka", "customer"]
+        },
+        "central": {
+            "ip": "IP_LINUX_1",
+            "ports": [50051],
+            "services": ["central"]
+        },
+        "taxi": {
+            "ip": "IP_LINUX_2",
+            "ports": [50052],
+            "services": ["taxi", "sensors"]
+        }
+    }
+}

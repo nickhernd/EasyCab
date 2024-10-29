@@ -1,0 +1,19 @@
+version: '3'
+services:
+  central:
+    build:
+      context: ./central
+      dockerfile: Dockerfile
+    environment:
+      - KAFKA_HOST=${PC1_IP}
+      - KAFKA_PORT=9092
+      - CENTRAL_HOST=0.0.0.0
+      - CENTRAL_PORT=50051
+    ports:
+      - "50051:50051"
+    networks:
+      - easycab_network
+
+networks:
+  easycab_network:
+    driver: bridge

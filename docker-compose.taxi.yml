@@ -1,0 +1,17 @@
+version: '3'
+services:
+  taxi:
+    build:
+      context: ./taxi
+      dockerfile: Dockerfile
+    environment:
+      - KAFKA_HOST=${PC1_IP}
+      - KAFKA_PORT=9092
+      - CENTRAL_HOST=${PC2_IP}
+      - CENTRAL_PORT=50051
+    networks:
+      - easycab_network
+
+networks:
+  easycab_network:
+    driver: bridge
