@@ -1,9 +1,10 @@
-version: '3'
 services:
   customer:
     build:
       context: .
       dockerfile: customer/Dockerfile
+    env_file:
+      - ./config.env
     environment:
       KAFKA_IP: ${KAFKA_IP}  # IP de Kafka desde el archivo .env
       CUSTOMER_ID: "customer1"
@@ -16,6 +17,3 @@ services:
 networks:
   easycab_network:
     driver: bridge
-
-env_file:
-  - ./config.env

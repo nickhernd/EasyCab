@@ -4,6 +4,8 @@ services:
     build:
       context: .
       dockerfile: taxi/Dockerfile
+    env_file:
+    - ./config.env
     environment:
       KAFKA_IP: ${KAFKA_IP}  # IP de Kafka desde el archivo .env
       CENTRAL_IP: ${CENTRAL_IP}
@@ -29,6 +31,3 @@ services:
 networks:
   easycab_network:
     driver: bridge
-
-env_file:
-  - ./config.env

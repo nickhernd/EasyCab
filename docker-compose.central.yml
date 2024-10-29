@@ -17,6 +17,8 @@ services:
     build:
       context: .
       dockerfile: central/Dockerfile
+    env_file:
+      - ./config.env
     environment:
       KAFKA_HOST: ${KAFKA_IP}  # IP de Kafka desde el archivo .env
       CENTRAL_PORT: 50051
@@ -37,6 +39,3 @@ networks:
 
 volumes:
   mysql_data:
-
-env_file:
-  - ./config.env
