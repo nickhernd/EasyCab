@@ -1,0 +1,6 @@
+fastapi
+uvicorn
+kafka-python
+pyjwt
+cryptography
+python-dotenv

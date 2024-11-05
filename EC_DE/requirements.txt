@@ -1,0 +1,5 @@
+kafka-python
+pyjwt
+cryptography
+python-dotenv
+tkinter 

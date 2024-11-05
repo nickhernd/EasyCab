@@ -1,4 +1,7 @@
-node_modules
-*.pyc
-__pycache__
-.env
+.env 
+__pycache__/ 
+*.pyc 
+node_modules/ 
+.DS_Store 
+.idea/ 
+.vscode/ 
