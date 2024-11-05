@@ -1,0 +1,36 @@
+# Dependencias básicas
+python-dotenv
+pyyaml
+pytest
+
+# Comunicación y Red
+kafka-python
+fastapi
+uvicorn
+requests
+websockets
+aiohttp
+
+# Seguridad
+cryptography
+python-jose
+passlib
+bcrypt
+PyJWT
+
+# Interfaz gráfica
+tkinter
+pillow
+
+# Base de datos
+sqlalchemy
+sqlite3
+
+# Logging y monitoreo
+python-logging-config
+prometheus-client
+
+# Utilidades
+numpy
+pandas
+python-dateutil

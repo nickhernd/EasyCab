@@ -1,7 +1,69 @@
-.env 
-__pycache__/ 
-*.pyc 
-node_modules/ 
-.DS_Store 
-.idea/ 
-.vscode/ 
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Entornos virtuales
+venv/
+ENV/
+env/
+.env
+
+# IDEs y editores
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Logs y bases de datos
+*.log
+*.sqlite
+*.db
+logs/*
+!logs/.gitkeep
+
+# Certificados y claves
+*.pem
+*.key
+*.crt
+
+# Archivos temporales
+*.tmp
+.DS_Store
+Thumbs.db
+
+# Kafka
+kafka-logs/
+zookeeper-data/
+
+# Archivos de configuración local
+config/local/
+*_local.*
+
+# Docker
+.docker/
+docker-compose.override.yml
+
+# Archivos de prueba
+test/temp/
+coverage/
+.coverage
+htmlcov/
