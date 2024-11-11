@@ -3,7 +3,7 @@ import socket
 import sys
 import threading
 import json
-from typing import List, Dict, Tuple
+from typing import List, Dict, Optional, Tuple
 import logging
 from dataclasses import dataclass
 from kafka import KafkaProducer, KafkaConsumer
@@ -13,49 +13,148 @@ import numpy as np
 class Taxi:
     id: int
     position: Tuple[int, int]
-    state: str  # 'GREEN' for moving, 'RED' for stopped
+    state: str 
     destination: Tuple[int, int] = None
     token: str = None
+
+@dataclass
+class Location:
+    id: str
+    position: Tuple[int, int]
+    type: str = "LOCATION"
+
+@dataclass
+class MapCell:
+    content: Optional[Location] = None
+    color: str = "WHITE"
 
 class MapManager:
     def __init__(self, size: int = 20):
         self.size = size
-        self.map = np.full((size, size), None)
-        self.locations = {}  # Dictionary to store locations from config file
-        self.taxis: Dict[int, Taxi] = {}
-        
+        self.map = [[MapCell() for _ in range(size)] for _ in range(size)]
+        self.locations: Dict[str, Location] = {}
+        self.taxis: Dict[int, Location] = {}
+        self.clients: Dict[str, Location] = {}
+        self.logger = logging.getLogger('EC_Central.MapManager')
+
+    def normalize_position(self, x: int, y: int) -> Tuple[int, int]:
+        """Normaliza las coordenadas para el mapa esférico"""
+        return (x % self.size, y % self.size)
+
     def load_locations(self, filename: str):
-        """Load locations from config file"""
+        """Carga las ubicaciones desde el archivo de configuración"""
         try:
             with open(filename, 'r') as f:
                 for line in f:
                     loc_id, x, y = line.strip().split()
-                    self.locations[loc_id] = (int(x), int(y))
-                    self.map[int(x)][int(y)] = f'LOC_{loc_id}'
+                    x, y = int(x), int(y)
+                    x, y = self.normalize_position(x-1, y-1)
+                    location = Location(loc_id, (x, y), "LOCATION")
+                    self.locations[loc_id] = location
+                    self.map[x][y] = MapCell(location, "BLUE")
+                self.logger.info(f"Loaded {len(self.locations)} locations")
         except Exception as e:
-            logging.error(f"Error loading locations: {e}")
+            self.logger.error(f"Error loading locations: {e}")
+            raise
 
-    def update_taxi_position(self, taxi_id: int, new_position: Tuple[int, int], state: str):
-        """Update taxi position on map"""
+    def is_position_free(self, x: int, y: int) -> bool:
+        """Verifica si una posición está libre"""
+        return self.map[x][y].content is None
+
+    def add_taxi(self, taxi_id: int, position: Tuple[int, int], state: str = "RED"):
+        """Añade o actualiza la posición de un taxi"""
+        x, y = self.normalize_position(position[0]-1, position[1]-1)
+        
+        # Si el taxi ya existe, limpia su posición anterior
         if taxi_id in self.taxis:
             old_pos = self.taxis[taxi_id].position
-            if old_pos:
-                self.map[old_pos[0]][old_pos[1]] = None
-            
-            self.taxis[taxi_id].position = new_position
-            self.taxis[taxi_id].state = state
-            self.map[new_position[0]][new_position[1]] = f'TAXI_{taxi_id}_{state}'
-            return True
-        return False
+            self.map[old_pos[0]][old_pos[1]] = MapCell()
 
-    def get_map_state(self) -> str:
-        """Return current map state as string"""
-        return json.dumps({
-            'map': self.map.tolist(),
-            'locations': self.locations,
-            'taxis': {k: {'position': v.position, 'state': v.state} 
-                     for k, v in self.taxis.items()}
-        })
+        # Verifica colisiones
+        if not self.is_position_free(x, y):
+            self.logger.warning(f"Position ({x+1},{y+1}) is occupied")
+            return False
+
+        # Añade el taxi a la nueva posición
+        taxi_location = Location(str(taxi_id), (x, y), "TAXI")
+        self.taxis[taxi_id] = taxi_location
+        self.map[x][y] = MapCell(taxi_location, "GREEN" if state == "MOVING" else "RED")
+        return True
+
+    def add_client(self, client_id: str, position: Tuple[int, int]):
+        """Añade o actualiza la posición de un cliente"""
+        x, y = self.normalize_position(position[0]-1, position[1]-1)
+        
+        if client_id in self.clients:
+            old_pos = self.clients[client_id].position
+            self.map[old_pos[0]][old_pos[1]] = MapCell()
+
+        if not self.is_position_free(x, y):
+            self.logger.warning(f"Position ({x+1},{y+1}) is occupied")
+            return False
+
+        client_location = Location(client_id, (x, y), "CLIENT")
+        self.clients[client_id] = client_location
+        self.map[x][y] = MapCell(client_location, "YELLOW")
+        return True
+
+    def get_path(self, start: Tuple[int, int], end: Tuple[int, int]) -> List[Tuple[int, int]]:
+        """Calcula la ruta más corta entre dos puntos considerando el mapa esférico"""
+        start_x, start_y = self.normalize_position(start[0]-1, start[1]-1)
+        end_x, end_y = self.normalize_position(end[0]-1, end[1]-1)
+        path = []
+        current = (start_x, start_y)
+
+        while current != (end_x, end_y):
+            next_x, next_y = current
+            
+            # Calcula las diferencias considerando el mapa esférico
+            dx = (end_x - current[0] + self.size//2) % self.size - self.size//2
+            dy = (end_y - current[1] + self.size//2) % self.size - self.size//2
+
+            if dx != 0:
+                next_x = (current[0] + (1 if dx > 0 else -1)) % self.size
+            if dy != 0:
+                next_y = (current[1] + (1 if dy > 0 else -1)) % self.size
+
+            current = (next_x, next_y)
+            path.append((current[0]+1, current[1]+1))  # Convertir a coordenadas 1-based
+
+        return path
+
+    def to_dict(self) -> dict:
+        """Convierte el mapa a un diccionario para serialización"""
+        return {
+            'size': self.size,
+            'locations': {k: {'position': (v.position[0]+1, v.position[1]+1)} 
+                         for k, v in self.locations.items()},
+            'taxis': {k: {'position': (v.position[0]+1, v.position[1]+1)} 
+                     for k, v in self.taxis.items()},
+            'clients': {k: {'position': (v.position[0]+1, v.position[1]+1)} 
+                       for k, v in self.clients.items()},
+            'map': [[{
+                'type': cell.content.type if cell.content else None,
+                'id': cell.content.id if cell.content else None,
+                'color': cell.color
+            } for cell in row] for row in self.map]
+        }
+
+    def get_ascii_map(self) -> str:
+        """Genera una representación ASCII del mapa para debugging"""
+        result = []
+        for row in self.map:
+            row_str = []
+            for cell in row:
+                if cell.content is None:
+                    row_str.append('.')
+                elif cell.content.type == "LOCATION":
+                    row_str.append(cell.content.id)
+                elif cell.content.type == "TAXI":
+                    row_str.append(f"T{cell.content.id}")
+                elif cell.content.type == "CLIENT":
+                    row_str.append(f"C{cell.content.id}")
+            result.append(' '.join(row_str))
+        return '\n'.join(result)
 
 class ECCentral:
     def __init__(self, host: str = '0.0.0.0', port: int = 5000, kafka_server: str = 'localhost:9092'):
