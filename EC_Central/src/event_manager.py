@@ -48,35 +48,3 @@ class EventManager:
         self.logger.info(f"Processing event: {event.type.value}")
         self.event_history.append(event)
 
-        # Enviar evento a Kafka
-        try:
-            self.producer.send(
-                'events',
-                {
-                    'type': event.type.value,
-                    'data': event.data,
-                    'timestamp': event.timestamp,
-                    'source_id': event.source_id,
-                    'target_id': event.target_id
-                }
-            )
-        except Exception as e:
-            self.logger.error(f"Error sending event to Kafka: {e}")
-
-        # Procesar con manejadores locales
-        for handler in self.handlers[event.type]:
-            try:
-                handler(event)
-            except Exception as e:
-                self.logger.error(f"Error in event handler: {e}")
-
-    def get_recent_events(self, minutes: int = 5) -> List[Event]:
-        """Obtiene eventos recientes para auditoría"""
-        cutoff_time = time.time() - (minutes * 60)
-        return [event for event in self.event_history if event.timestamp >= cutoff_time]
-
-    def cleanup_old_events(self, hours: int = 24):
-        """Limpia eventos antiguos"""
-        cutoff_time = time.time() - (hours * 3600)
-        self.event_history = [event for event in self.event_history 
-                            if event.timestamp >= cutoff_time]

@@ -1,4 +1,5 @@
 # EC_Central/src/main.py
+
 import socket
 import sys
 import threading
@@ -34,7 +35,7 @@ class MapManager:
         self.map = [[MapCell() for _ in range(size)] for _ in range(size)]
         self.locations: Dict[str, Location] = {}
         self.taxis: Dict[int, Location] = {}
-        self.clients: Dict[str, Location] = {}
+        self.lients: Dict[str, Location] = {}
         self.logger = logging.getLogger('EC_Central.MapManager')
 
     def normalize_position(self, x: int, y: int) -> Tuple[int, int]:
@@ -343,7 +344,7 @@ if __name__ == "__main__":
         server = ECCentral(port=port, kafka_server=kafka_server)
         server.start()
     except ValueError:
-        print("Error: El puerto debe ser un número entero")
+        print("Error: El puerto debe ser un número entero"
         sys.exit(1)
     except Exception as e:
         print(f"Error al iniciar el servidor: {e}")
