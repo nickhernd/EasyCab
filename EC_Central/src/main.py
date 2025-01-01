@@ -344,7 +344,7 @@ if __name__ == "__main__":
         server = ECCentral(port=port, kafka_server=kafka_server)
         server.start()
     except ValueError:
-        print("Error: El puerto debe ser un número entero"
+        print("Error: El puerto debe ser un número entero")
         sys.exit(1)
     except Exception as e:
         print(f"Error al iniciar el servidor: {e}")
